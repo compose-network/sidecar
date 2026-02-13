@@ -1,0 +1,20 @@
+server:
+  listen_addr: "0.0.0.0:8080"
+  read_timeout_secs: 30
+  write_timeout_secs: 30
+
+publisher:
+  addr: ""
+  reconnect_delay_secs: 5
+  max_retries: 10
+  enabled: false
+
+chains:
+  list: []
+
+peers:
+  sidecars: []
+
+log:
+  level: "info"
+  format: "json"

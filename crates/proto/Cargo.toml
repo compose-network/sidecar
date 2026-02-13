@@ -1,0 +1,19 @@
+[package]
+name = "compose-proto"
+version = "0.1.0"
+description = "Protobuf message definitions and conversions for Compose transport and coordination protocols"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+compose-primitives.workspace = true
+prost.workspace = true
+bytes.workspace = true
+hex.workspace = true
+
+[build-dependencies]
+prost-build.workspace = true

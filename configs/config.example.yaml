@@ -1,0 +1,41 @@
+# Compose Sidecar Configuration
+#
+# All settings can be overridden via environment variables with the
+# SIDECAR_ prefix. For example, SIDECAR_SERVER_LISTEN_ADDR=":9090".
+
+server:
+  # Address the HTTP server listens on
+  listen_addr: "0.0.0.0:8080"
+  # HTTP read timeout in seconds
+  read_timeout_secs: 30
+  # HTTP write timeout in seconds
+  write_timeout_secs: 30
+
+publisher:
+  # QUIC address of the shared publisher (SP)
+  addr: "publisher:8080"
+  # Delay between reconnection attempts in seconds
+  reconnect_delay_secs: 5
+  # Maximum number of connection retries
+  max_retries: 10
+  # Whether to connect to the publisher (false = standalone mode)
+  enabled: true
+
+chains:
+  list:
+    - id: 901
+      name: "chain-a"
+      rpc: "http://op-geth-a:8545"
+      mailbox_address: "0x0000000000000000000000000000000000000000"
+      coordinator_key: ""  # Private key for signing putInbox transactions
+
+peers:
+  sidecars:
+    - chain_id: 902
+      addr: "sidecar-b:8080"
+
+log:
+  # Log level: debug, info, warn, error
+  level: "info"
+  # Log format: json, pretty
+  format: "json"

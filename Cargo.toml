@@ -1,0 +1,99 @@
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace]
+members = [
+    "bin/sidecar",
+    "crates/primitives",
+    "crates/proto",
+    "crates/config",
+    "crates/net/transport",
+    "crates/net/peer",
+    "crates/mailbox",
+    "crates/simulation",
+    "crates/coordinator/coordinator",
+    "crates/coordinator/server",
+    "crates/tracing",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# compose
+compose-primitives = { path = "crates/primitives" }
+compose-proto = { path = "crates/proto" }
+compose-config = { path = "crates/config" }
+compose-transport = { path = "crates/net/transport" }
+compose-peer = { path = "crates/net/peer" }
+compose-mailbox = { path = "crates/mailbox" }
+compose-simulation = { path = "crates/simulation" }
+compose-coordinator = { path = "crates/coordinator/coordinator" }
+compose-server = { path = "crates/coordinator/server" }
+compose-tracing = { path = "crates/tracing" }
+
+# Async
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+futures = "0.3"
+
+# QUIC
+quinn = "0.11"
+rustls = { version = "0.23", features = ["ring"] }
+rcgen = "0.13"
+
+# Ethereum
+alloy = { version = "1.0", features = [
+    "sol-types", "consensus", "network",
+    "signers", "signer-local", "providers", "provider-http",
+    "rpc-types", "rlp",
+] }
+
+# Protobuf
+prost = "0.13"
+prost-build = "0.13"
+
+# HTTP
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+# Config
+config = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+
+# Misc
+bytes = "1.0"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+doc_markdown = "warn"
+derive_partial_eq_without_eq = "warn"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1
