@@ -12,6 +12,7 @@ pub trait PeerCoordinator: Send + Sync + 'static {
         &self,
         instance_id: &str,
         txs: &HashMap<ChainId, Vec<Vec<u8>>>,
+        origin_chain: ChainId,
         origin_seq: SequenceNumber,
     ) -> Result<(), PeerError>;
 

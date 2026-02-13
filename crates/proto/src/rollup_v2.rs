@@ -317,7 +317,7 @@ pub struct WireMessage {
     pub sender_id: String,
     #[prost(
         oneof = "wire_message::Payload",
-        tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16"
+        tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
     )]
     pub payload: Option<wire_message::Payload>,
 }
@@ -360,5 +360,15 @@ pub mod wire_message {
         Pong(super::Pong),
         #[prost(message, tag = "16")]
         Disconnect(super::DisconnectMessage),
+
+        // Sidecar control-plane messages
+        #[prost(message, tag = "17")]
+        StartInstance(super::StartInstance),
+        #[prost(message, tag = "18")]
+        StartPeriod(super::StartPeriod),
+        #[prost(message, tag = "19")]
+        MailboxMessage(super::MailboxMessage),
+        #[prost(message, tag = "20")]
+        Rollback(super::Rollback),
     }
 }

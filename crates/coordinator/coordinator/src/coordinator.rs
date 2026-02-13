@@ -8,13 +8,15 @@ use compose_mailbox::traits::MailboxQueue;
 use compose_peer::traits::PeerCoordinator;
 use compose_primitives::{ChainId, ChainState, PeriodId, SequenceNumber, SuperblockNumber};
 use compose_simulation::traits::Simulator;
+use prost::Message;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{error, info, warn};
 
 use crate::error::CoordinatorError;
 use crate::model::pending_xt::PendingXt;
 use crate::model::xt_status::{determine_xt_status, XtStatusResponse};
 use crate::nonce_manager::DeferredNonceManager;
+use crate::pipeline::submission::{build_xt_request, xt_request_fingerprint};
 use crate::traits::mailbox::MailboxSender;
 use crate::traits::publisher::PublisherClient;
 use crate::traits::put_inbox::PutInboxBuilder;
@@ -29,6 +31,8 @@ pub(crate) struct CoordinatorState {
     pub period_initialized: bool,
     pub last_sequence_num: SequenceNumber,
     pub last_known_blocks: HashMap<ChainId, u64>,
+    /// Monotonic counter for locally-originated XTs in standalone mode.
+    pub origin_seq: SequenceNumber,
 }
 
 impl CoordinatorState {
@@ -41,6 +45,7 @@ impl CoordinatorState {
             period_initialized: false,
             last_sequence_num: SequenceNumber(0),
             last_known_blocks: HashMap::new(),
+            origin_seq: SequenceNumber(0),
         }
     }
 
@@ -175,6 +180,99 @@ impl DefaultCoordinator {
             .as_ref()
             .map(|p| p.is_connected())
             .unwrap_or(false)
+    }
+
+    /// Submit a cross-chain transaction.
+    ///
+    /// In publisher-connected mode, the XT is encoded as an `XtRequest` protobuf
+    /// and sent to the publisher, which assigns the instance ID. In standalone
+    /// mode, a local ID is generated and the XT is forwarded to peer sidecars.
+    pub async fn submit_xt(
+        &self,
+        txs: HashMap<ChainId, Vec<Vec<u8>>>,
+    ) -> Result<String, CoordinatorError> {
+        if txs.is_empty() {
+            return Err(CoordinatorError::NoTransactions);
+        }
+
+        if self.is_publisher_connected().await {
+            self.submit_xt_publisher(txs).await
+        } else {
+            self.submit_xt_standalone(txs).await
+        }
+    }
+
+    async fn submit_xt_publisher(
+        &self,
+        txs: HashMap<ChainId, Vec<Vec<u8>>>,
+    ) -> Result<String, CoordinatorError> {
+        let publisher = self
+            .publisher
+            .as_ref()
+            .ok_or(CoordinatorError::PublisherNotConnected)?;
+
+        let xt_request = build_xt_request(&txs);
+        let fingerprint = xt_request_fingerprint(&xt_request);
+
+        let wire = compose_proto::rollup_v2::WireMessage {
+            sender_id: String::new(),
+            payload: Some(compose_proto::rollup_v2::wire_message::Payload::XtRequest(
+                xt_request,
+            )),
+        };
+        let data = wire.encode_to_vec();
+
+        publisher
+            .send_raw(&data)
+            .await
+            .map_err(|e| CoordinatorError::Other(format!("failed to send XT to publisher: {e}")))?;
+
+        info!(fingerprint = %fingerprint, "Submitted XT to publisher");
+        Ok(fingerprint)
+    }
+
+    async fn submit_xt_standalone(
+        &self,
+        txs: HashMap<ChainId, Vec<Vec<u8>>>,
+    ) -> Result<String, CoordinatorError> {
+        let instance_id = {
+            let mut state = self.state.write().await;
+            state.origin_seq = SequenceNumber(state.origin_seq.0 + 1);
+            let seq = state.origin_seq;
+            let id = format!("xt-{}-{}", self.chain_id, seq.0);
+
+            let mut xt = PendingXt::new(id.clone(), id.as_bytes().to_vec());
+            xt.origin_chain = Some(self.chain_id);
+            xt.origin_seq = seq;
+            xt.raw_txs = txs.clone();
+
+            state.pending.insert(id.clone(), xt);
+            id
+        };
+
+        info!(instance_id = %instance_id, "Submitted XT locally (standalone mode)");
+
+        if let Some(peer_coordinator) = &self.peer_coordinator {
+            let id = instance_id.clone();
+            let chain_id = self.chain_id;
+            let origin_seq = {
+                let state = self.state.read().await;
+                state.origin_seq
+            };
+            let pc = peer_coordinator.clone();
+            tokio::spawn(async move {
+                if let Err(e) = pc.forward_xt(&id, &txs, chain_id, origin_seq).await {
+                    error!(instance_id = %id, error = %e, "Failed to forward XT to peers");
+                }
+            });
+        } else {
+            warn!(
+                instance_id = %instance_id,
+                "No peer coordinator configured, XT will only be processed locally"
+            );
+        }
+
+        Ok(instance_id)
     }
 
     /// Cheap clone that shares all internal state (for spawning tasks).

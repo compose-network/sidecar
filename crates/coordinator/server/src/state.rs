@@ -16,4 +16,8 @@ impl AppState {
             coordinator: Arc::new(coordinator),
         }
     }
+
+    pub fn from_arc(coordinator: Arc<DefaultCoordinator>) -> Self {
+        Self { coordinator }
+    }
 }

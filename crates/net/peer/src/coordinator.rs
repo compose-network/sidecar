@@ -47,13 +47,13 @@ impl PeerCoordinator for HttpPeerCoordinator {
         &self,
         instance_id: &str,
         txs: &HashMap<ChainId, Vec<Vec<u8>>>,
+        origin_chain: ChainId,
         origin_seq: SequenceNumber,
     ) -> Result<(), PeerError> {
-        let origin_chain = self.peers.first().map(|p| p.chain_id).unwrap_or(ChainId(0));
-
         let req = XtForwardRequest::new(instance_id.to_string(), txs, origin_chain, origin_seq);
 
         let urls = self.all_peer_urls("/xt/forward");
+        let mut errors = Vec::new();
         for (chain_id, url) in urls {
             let body =
                 serde_json::to_vec(&req).map_err(|e| PeerError::Serialization(e.to_string()))?;
@@ -70,19 +70,23 @@ impl PeerCoordinator for HttpPeerCoordinator {
                     info!(chain_id = %chain_id, instance_id, "Forwarded XT to peer");
                 }
                 Ok(resp) => {
-                    warn!(
-                        chain_id = %chain_id,
-                        status = %resp.status(),
-                        "Peer rejected forwarded XT"
-                    );
+                    let msg = format!("chain {chain_id} rejected forward: {}", resp.status());
+                    warn!(chain_id = %chain_id, status = %resp.status(), "Peer rejected forwarded XT");
+                    errors.push(msg);
                 }
                 Err(e) => {
+                    let msg = format!("chain {chain_id} forward failed: {e}");
                     error!(chain_id = %chain_id, error = %e, "Failed to forward XT to peer");
+                    errors.push(msg);
                 }
             }
         }
 
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(PeerError::Request(errors.join("; ")))
+        }
     }
 
     async fn send_vote_to_peers(
@@ -98,6 +102,7 @@ impl PeerCoordinator for HttpPeerCoordinator {
         };
 
         let urls = self.all_peer_urls("/xt/vote");
+        let mut errors = Vec::new();
         for (peer_chain_id, url) in urls {
             let body =
                 serde_json::to_vec(&req).map_err(|e| PeerError::Serialization(e.to_string()))?;
@@ -119,23 +124,23 @@ impl PeerCoordinator for HttpPeerCoordinator {
                     );
                 }
                 Ok(resp) => {
-                    warn!(
-                        peer_chain_id = %peer_chain_id,
-                        status = %resp.status(),
-                        "Peer rejected vote"
-                    );
+                    let msg = format!("chain {peer_chain_id} rejected vote: {}", resp.status());
+                    warn!(peer_chain_id = %peer_chain_id, status = %resp.status(), "Peer rejected vote");
+                    errors.push(msg);
                 }
                 Err(e) => {
-                    error!(
-                        peer_chain_id = %peer_chain_id,
-                        error = %e,
-                        "Failed to send vote to peer"
-                    );
+                    let msg = format!("chain {peer_chain_id} vote failed: {e}");
+                    error!(peer_chain_id = %peer_chain_id, error = %e, "Failed to send vote to peer");
+                    errors.push(msg);
                 }
             }
         }
 
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(PeerError::Request(errors.join("; ")))
+        }
     }
 
     fn peer_chain_ids(&self) -> Vec<ChainId> {

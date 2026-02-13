@@ -7,6 +7,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use compose_coordinator::error::CoordinatorError;
 use compose_coordinator::traits::publisher::PublisherClient;
+use compose_primitives::ChainId;
+use compose_proto::conversions::chain_id_to_bytes;
 use compose_proto::rollup_v2::{wire_message, Vote, WireMessage, XtId};
 use compose_transport::client::QuicClient;
 use compose_transport::traits::Transport;
@@ -17,13 +19,15 @@ use prost::Message;
 pub(crate) struct QuicPublisherAdapter {
     client: Arc<QuicClient>,
     connected: AtomicBool,
+    chain_id: ChainId,
 }
 
 impl QuicPublisherAdapter {
-    pub(crate) fn new(client: Arc<QuicClient>) -> Self {
+    pub(crate) fn new(client: Arc<QuicClient>, chain_id: ChainId) -> Self {
         Self {
             client,
             connected: AtomicBool::new(false),
+            chain_id,
         }
     }
 }
@@ -32,6 +36,7 @@ impl std::fmt::Debug for QuicPublisherAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuicPublisherAdapter")
             .field("connected", &self.connected.load(Ordering::SeqCst))
+            .field("chain_id", &self.chain_id)
             .finish()
     }
 }
@@ -69,7 +74,7 @@ impl PublisherClient for QuicPublisherAdapter {
         let msg = WireMessage {
             sender_id: String::new(),
             payload: Some(wire_message::Payload::Vote(Vote {
-                sender_chain_id: Vec::new(),
+                sender_chain_id: chain_id_to_bytes(self.chain_id),
                 xt_id: Some(XtId {
                     hash: instance_id.to_vec(),
                 }),

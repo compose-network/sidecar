@@ -26,7 +26,7 @@ pub struct XtSubmitResponse {
 
 /// `POST /xt` — submit a cross-chain transaction.
 pub async fn handle_submit_xt(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<XtSubmitRequest>,
 ) -> Result<Json<XtSubmitResponse>, ServerError> {
     // Decode hex transactions.
@@ -47,9 +47,10 @@ pub async fn handle_submit_xt(
         return Err(ServerError::BadRequest("no transactions".to_string()));
     }
 
-    // Return an accepted response after request validation.
+    let instance_id = state.coordinator.submit_xt(txs).await?;
+
     Ok(Json(XtSubmitResponse {
-        instance_id: "pending".to_string(),
+        instance_id,
         status: "submitted".to_string(),
     }))
 }

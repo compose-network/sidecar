@@ -32,3 +32,4 @@ prost.workspace = true
 bytes.workspace = true
 hex.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true

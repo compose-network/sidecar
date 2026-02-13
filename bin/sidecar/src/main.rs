@@ -4,6 +4,7 @@ mod adapters;
 mod handlers;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use compose_config::SidecarConfig;
@@ -15,8 +16,14 @@ use compose_server::router::build_router;
 use compose_server::state::AppState;
 use compose_simulation::rpc::RpcSimulator;
 use compose_simulation::types::ChainRpcConfig;
+use compose_transport::client::QuicClient;
+use compose_transport::config::ClientConfig;
+use compose_transport::traits::Transport;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{error, info, warn};
+
+use crate::adapters::mailbox::PeerMailboxSender;
+use crate::adapters::publisher::QuicPublisherAdapter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,11 +37,18 @@ async fn main() -> Result<()> {
 
     info!("Starting sidecar");
 
-    let coordinator = build_coordinator(&config);
+    let (coordinator, quic_client) = build_coordinator(&config);
 
     coordinator.start().await?;
 
-    let state = AppState::new(coordinator);
+    let coordinator_arc = Arc::new(coordinator);
+
+    // Spawn the publisher QUIC receive loop if publisher is configured.
+    if let Some(client) = quic_client {
+        spawn_publisher_connection(coordinator_arc.clone(), client);
+    }
+
+    let state = AppState::from_arc(coordinator_arc);
     let router = build_router(state);
 
     let listener = TcpListener::bind(&config.server.listen_addr).await?;
@@ -48,7 +62,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_coordinator(config: &SidecarConfig) -> DefaultCoordinator {
+fn build_coordinator(config: &SidecarConfig) -> (DefaultCoordinator, Option<Arc<QuicClient>>) {
     let chain_id = config
         .chains
         .list
@@ -76,7 +90,7 @@ fn build_coordinator(config: &SidecarConfig) -> DefaultCoordinator {
     builder = builder.mailbox_queue(Arc::new(InMemoryQueue::new()));
 
     // Set up peer coordinator.
-    if !config.peers.sidecars.is_empty() {
+    let peer_coordinator: Option<Arc<HttpPeerCoordinator>> = if !config.peers.sidecars.is_empty() {
         let peers: Vec<PeerEntry> = config
             .peers
             .sidecars
@@ -86,10 +100,81 @@ fn build_coordinator(config: &SidecarConfig) -> DefaultCoordinator {
                 addr: p.addr.clone(),
             })
             .collect();
-        builder = builder.peer_coordinator(Arc::new(HttpPeerCoordinator::new(peers)));
+        let pc = Arc::new(HttpPeerCoordinator::new(peers));
+        builder = builder.peer_coordinator(pc.clone());
+        Some(pc)
+    } else {
+        None
+    };
+
+    // Set up mailbox sender (uses the peer coordinator for HTTP delivery).
+    if peer_coordinator.is_some() {
+        let entries: Vec<PeerEntry> = config
+            .peers
+            .sidecars
+            .iter()
+            .map(|p| PeerEntry {
+                chain_id: compose_primitives::ChainId(p.chain_id),
+                addr: p.addr.clone(),
+            })
+            .collect();
+        builder =
+            builder.mailbox_sender(Arc::new(PeerMailboxSender::with_peer_entries(&entries)));
     }
 
-    builder.build()
+    // Set up publisher adapter and QUIC client.
+    let quic_client = if config.publisher.enabled && !config.publisher.addr.is_empty() {
+        let client_config = ClientConfig {
+            addr: config.publisher.addr.clone(),
+            reconnect_delay: Duration::from_secs(config.publisher.reconnect_delay_secs),
+            max_retries: config.publisher.max_retries,
+            ..Default::default()
+        };
+        match QuicClient::new(client_config) {
+            Ok(client) => {
+                let adapter = QuicPublisherAdapter::new(client.clone(), chain_id);
+                builder = builder.publisher(Arc::new(adapter));
+                Some(client)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to create QUIC client, running without publisher");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    (builder.build(), quic_client)
+}
+
+/// Connect to the publisher and spawn a background receive loop.
+fn spawn_publisher_connection(coordinator: Arc<DefaultCoordinator>, client: Arc<QuicClient>) {
+    tokio::spawn(async move {
+        info!("Connecting to publisher");
+        if let Err(e) = client.connect_with_retry().await {
+            error!(error = %e, "Failed to connect to publisher after retries");
+            return;
+        }
+        info!("Connected to publisher, starting receive loop");
+
+        loop {
+            match client.recv().await {
+                Ok(data) => {
+                    let coord = coordinator.clone();
+                    tokio::spawn(async move {
+                        handlers::publisher::handle_publisher_message(coord, data).await;
+                    });
+                }
+                Err(e) => {
+                    warn!(error = %e, "Publisher receive error, connection may be lost");
+                    break;
+                }
+            }
+        }
+
+        warn!("Publisher receive loop ended");
+    });
 }
 
 async fn shutdown_signal() {

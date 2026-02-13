@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use alloy::primitives::{Address, U256};
 use async_trait::async_trait;
 use compose_primitives::{ChainId, CrossRollupDependency, CrossRollupMessage, SimulationResult};
 use reqwest::Client;
@@ -18,6 +19,7 @@ use crate::types::ChainRpcConfig;
 pub struct RpcSimulator {
     client: Client,
     chains: HashMap<ChainId, ChainRpcConfig>,
+    mailbox_address: Option<Address>,
 }
 
 impl RpcSimulator {
@@ -26,7 +28,13 @@ impl RpcSimulator {
         Self {
             client: Client::new(),
             chains: map,
+            mailbox_address: None,
         }
+    }
+
+    pub fn with_mailbox_address(mut self, addr: Address) -> Self {
+        self.mailbox_address = Some(addr);
+        self
     }
 
     fn rpc_url(&self, chain_id: ChainId) -> Result<&str, SimulationError> {
@@ -82,6 +90,50 @@ impl RpcSimulator {
 
         Ok(result.get("result").cloned().unwrap_or(Value::Null))
     }
+
+    /// Convert parsed mailbox calls into cross-rollup dependencies and messages.
+    fn extract_mailbox_data(
+        &self,
+        trace: &Value,
+        chain_id: ChainId,
+    ) -> (Vec<CrossRollupDependency>, Vec<CrossRollupMessage>) {
+        let mailbox_addr = match self.mailbox_address {
+            Some(addr) => addr,
+            None => return (Vec::new(), Vec::new()),
+        };
+
+        let parsed = compose_mailbox::parser::parse_call_trace(trace, mailbox_addr);
+
+        let dependencies = parsed
+            .reads
+            .iter()
+            .map(|call| CrossRollupDependency {
+                source_chain_id: call.source_chain,
+                dest_chain_id: chain_id,
+                sender: call.sender,
+                receiver: call.receiver,
+                label: call.label.as_bytes().to_vec(),
+                data: None,
+                session_id: call.session_id.map(U256::from),
+            })
+            .collect();
+
+        let outbound_messages = parsed
+            .writes
+            .iter()
+            .map(|call| CrossRollupMessage {
+                source_chain_id: chain_id,
+                dest_chain_id: call.dest_chain,
+                sender: call.sender,
+                receiver: call.receiver,
+                label: call.label.clone(),
+                data: call.data.clone(),
+                session_id: call.session_id.map(U256::from),
+            })
+            .collect();
+
+        (dependencies, outbound_messages)
+    }
 }
 
 #[async_trait]
@@ -108,14 +160,14 @@ impl Simulator for RpcSimulator {
             .and_then(|e| e.as_str())
             .map(String::from);
 
-        // Mailbox dependencies and outbound messages are added by higher-level
-        // integrations. This backend returns execution outcome and trace data.
+        let (dependencies, outbound_messages) = self.extract_mailbox_data(&trace, chain_id);
+
         Ok(SimulationResult {
             success,
             error: error_msg,
             state_overrides: trace.get("stateOverrides").cloned(),
-            dependencies: Vec::new(),
-            outbound_messages: Vec::new(),
+            dependencies,
+            outbound_messages,
         })
     }
 
@@ -127,8 +179,9 @@ impl Simulator for RpcSimulator {
         _already_sent_msgs: &[CrossRollupMessage],
         _fulfilled_deps: &[CrossRollupDependency],
     ) -> Result<SimulationResult, SimulationError> {
-        // Mailbox-aware state augmentation is applied by callers before this
-        // backend is invoked. Reuse the same execution path here.
+        // Merge fulfilled dependency state into the override map.
+        // The caller is expected to have prepared the overrides with the
+        // mailbox state already applied. Use the same execution path.
         self.simulate(chain_id, tx, state_overrides).await
     }
 }

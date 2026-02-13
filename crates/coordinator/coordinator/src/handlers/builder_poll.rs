@@ -5,6 +5,7 @@ use compose_primitives::{BuilderPollRequest, BuilderPollResponse, ChainState};
 use crate::coordinator::DefaultCoordinator;
 use crate::error::CoordinatorError;
 use crate::model::ordering::xt_less;
+use crate::pipeline::delivery::{build_transaction_payloads, DeliverableXt};
 
 impl DefaultCoordinator {
     /// Process a builder poll from op-rbuilder. Returns committed transactions
@@ -116,7 +117,43 @@ impl DefaultCoordinator {
 
         // Check for deliverable committed XTs.
         let has_undecided = first_undecided.is_some();
+
+        // Collect committed XTs that haven't been delivered to this chain yet.
+        let mut deliverables = Vec::new();
+        for (id, xt) in &mut state.pending {
+            if !xt.is_committed() {
+                continue;
+            }
+            if xt.delivered_chains
+                .get(&req.chain_id)
+                .copied()
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let raw_txs = xt.raw_txs.get(&req.chain_id).cloned().unwrap_or_default();
+            if raw_txs.is_empty() {
+                continue;
+            }
+            deliverables.push(DeliverableXt {
+                id: id.clone(),
+                raw_txs,
+                deps: Vec::new(),
+            });
+            xt.delivered_chains.insert(req.chain_id, true);
+        }
+
         drop(state);
+
+        if !deliverables.is_empty() {
+            let txs = build_transaction_payloads(&deliverables);
+            return Ok(BuilderPollResponse {
+                hold: false,
+                txs,
+                poll_after_ms: None,
+                max_hold_ms: None,
+            });
+        }
 
         if has_undecided {
             Ok(BuilderPollResponse {

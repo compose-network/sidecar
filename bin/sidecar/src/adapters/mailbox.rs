@@ -1,23 +1,35 @@
 //! Mailbox sender adapter used by the sidecar binary.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use compose_coordinator::error::CoordinatorError;
 use compose_coordinator::traits::mailbox::MailboxSender;
-use compose_peer::traits::PeerCoordinator;
+use compose_peer::coordinator::PeerEntry;
 use compose_primitives::ChainId;
 use compose_proto::rollup_v2::MailboxMessage;
+use prost::Message;
+use reqwest::Client;
+use tracing::{error, info};
 
 /// Mailbox sender adapter that forwards CIRC messages to peer sidecars via HTTP.
 pub(crate) struct PeerMailboxSender {
-    #[allow(dead_code)]
-    peers: Arc<dyn PeerCoordinator>,
+    client: Client,
+    /// Chain ID -> peer HTTP address mapping.
+    peer_addrs: HashMap<ChainId, String>,
 }
 
 impl PeerMailboxSender {
-    pub(crate) fn new(peers: Arc<dyn PeerCoordinator>) -> Self {
-        Self { peers }
+    pub(crate) fn with_peer_entries(entries: &[PeerEntry]) -> Self {
+        let peer_addrs = entries
+            .iter()
+            .map(|e| (e.chain_id, e.addr.clone()))
+            .collect();
+
+        Self {
+            client: Client::new(),
+            peer_addrs,
+        }
     }
 }
 
@@ -31,10 +43,46 @@ impl std::fmt::Debug for PeerMailboxSender {
 impl MailboxSender for PeerMailboxSender {
     async fn send(
         &self,
-        _dest_chain_id: ChainId,
-        _msg: &MailboxMessage,
+        dest_chain_id: ChainId,
+        msg: &MailboxMessage,
     ) -> Result<(), CoordinatorError> {
-        // TODO: Send the protobuf-encoded message to the peer's /mailbox endpoint.
-        Ok(())
+        let addr = self.peer_addrs.get(&dest_chain_id).ok_or_else(|| {
+            CoordinatorError::Other(format!("no peer address for chain {dest_chain_id}"))
+        })?;
+
+        if addr.is_empty() {
+            return Err(CoordinatorError::Other(format!(
+                "empty peer address for chain {dest_chain_id}"
+            )));
+        }
+
+        let url = format!("http://{addr}/mailbox");
+        let body = msg.encode_to_vec();
+
+        match self
+            .client
+            .post(&url)
+            .header("content-type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                info!(
+                    dest_chain = %dest_chain_id,
+                    label = %msg.label,
+                    "Sent mailbox message to peer"
+                );
+                Ok(())
+            }
+            Ok(resp) => Err(CoordinatorError::Mailbox(format!(
+                "peer returned status {} for mailbox message",
+                resp.status()
+            ))),
+            Err(e) => {
+                error!(dest_chain = %dest_chain_id, error = %e, "Failed to send mailbox message");
+                Err(CoordinatorError::Mailbox(e.to_string()))
+            }
+        }
     }
 }
