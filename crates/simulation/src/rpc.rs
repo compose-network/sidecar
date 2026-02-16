@@ -2,7 +2,14 @@
 
 use std::collections::HashMap;
 
-use alloy::primitives::{Address, U256};
+use alloy::consensus::transaction::SignerRecoverable;
+use alloy::consensus::{Transaction, TxEnvelope};
+use alloy::primitives::{Address, Bytes, U256};
+use alloy::rpc::types::eth::TransactionRequest;
+use alloy_rpc_types_eth::state::StateOverride;
+use alloy_rpc_types_trace::geth::{
+    CallConfig, GethDebugTracingCallOptions, GethDebugTracingOptions,
+};
 use async_trait::async_trait;
 use compose_primitives::{ChainId, CrossRollupDependency, CrossRollupMessage, SimulationResult};
 use reqwest::Client;
@@ -46,23 +53,57 @@ impl RpcSimulator {
             })
     }
 
+    /// Decode RLP-encoded signed transaction bytes into an RPC call object
+    /// suitable for `debug_traceCall`.
+    fn decode_tx(tx_bytes: &[u8]) -> Result<TransactionRequest, SimulationError> {
+        let signed: TxEnvelope = alloy::rlp::Decodable::decode(&mut &tx_bytes[..])
+            .map_err(|e| SimulationError::Other(format!("failed to decode tx: {e}")))?;
+
+        let from = signed
+            .recover_signer()
+            .map_err(|e| SimulationError::Other(format!("failed to recover signer: {e}")))?;
+
+        let mut tx_request = TransactionRequest::default().from(from).gas_limit(signed.gas_limit());
+
+        if let Some(to) = signed.to() {
+            tx_request = tx_request.to(to);
+        }
+        if !signed.input().is_empty() {
+            tx_request.input.data = Some(Bytes::copy_from_slice(signed.input()));
+        }
+        if !signed.value().is_zero() {
+            tx_request = tx_request.value(signed.value());
+        }
+
+        Ok(tx_request)
+    }
+
+    fn parse_state_overrides(value: &Value) -> Result<Option<StateOverride>, SimulationError> {
+        match value {
+            Value::Null => Ok(None),
+            Value::Object(map) if map.is_empty() => Ok(None),
+            _ => serde_json::from_value::<StateOverride>(value.clone()).map(Some).map_err(|e| {
+                SimulationError::Other(format!("invalid state overrides payload: {e}"))
+            }),
+        }
+    }
+
     async fn trace_call(
         &self,
         chain_id: ChainId,
-        tx_hex: &str,
+        tx_args: &TransactionRequest,
         state_overrides: &Value,
     ) -> Result<Value, SimulationError> {
         let url = self.rpc_url(chain_id)?;
 
-        let params = json!([
-            tx_hex,
-            "latest",
-            {
-                "tracer": "callTracer",
-                "tracerConfig": { "withLog": true }
-            },
-            state_overrides
-        ]);
+        let tracing_opts = GethDebugTracingOptions::call_tracer(CallConfig::default().with_log());
+        let mut trace_opts = GethDebugTracingCallOptions::new(tracing_opts);
+
+        if let Some(overrides) = Self::parse_state_overrides(state_overrides)? {
+            trace_opts = trace_opts.with_state_overrides(overrides);
+        }
+
+        let params = json!([tx_args, "latest", trace_opts]);
 
         let body = json!({
             "jsonrpc": "2.0",
@@ -144,11 +185,11 @@ impl Simulator for RpcSimulator {
         tx: &[u8],
         state_overrides: &Value,
     ) -> Result<SimulationResult, SimulationError> {
-        let tx_hex = format!("0x{}", hex::encode(tx));
+        let tx_args = Self::decode_tx(tx)?;
 
         debug!(chain_id = %chain_id, "Simulating transaction");
 
-        let trace = self.trace_call(chain_id, &tx_hex, state_overrides).await?;
+        let trace = self.trace_call(chain_id, &tx_args, state_overrides).await?;
 
         let success = trace
             .get("error")

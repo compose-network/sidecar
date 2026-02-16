@@ -1,6 +1,6 @@
 //! Simulation pipeline and vote emission flow.
 
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::coordinator::DefaultCoordinator;
 use crate::model::pending_xt::PendingXt;
@@ -16,11 +16,32 @@ impl DefaultCoordinator {
     pub(crate) async fn process_xt(&self, instance_id: &str, _xt: &PendingXt) {
         info!(instance_id, chain_id = %self.chain_id, "Processing XT");
 
-        let tx_bytes_list = {
+        let (tx_bytes_list, base_overrides) = {
             let state = self.state.read().await;
             match state.pending.get(instance_id) {
                 Some(xt) => match xt.raw_txs.get(&self.chain_id) {
-                    Some(txs) if !txs.is_empty() => txs.clone(),
+                    Some(txs) if !txs.is_empty() => {
+                        let has_chain_state = xt.chain_states.contains_key(&self.chain_id);
+                        let has_overrides = xt
+                            .chain_states
+                            .get(&self.chain_id)
+                            .and_then(|cs| cs.state_overrides.as_ref())
+                            .is_some();
+                        debug!(
+                            instance_id,
+                            chain_id = %self.chain_id,
+                            has_chain_state,
+                            has_overrides,
+                            num_chain_states = xt.chain_states.len(),
+                            "Simulation state check"
+                        );
+                        let overrides = xt
+                            .chain_states
+                            .get(&self.chain_id)
+                            .and_then(|cs| cs.state_overrides.clone())
+                            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                        (txs.clone(), overrides)
+                    }
                     _ => {
                         warn!(instance_id, "No local transactions, rejecting");
                         drop(state);
@@ -50,14 +71,12 @@ impl DefaultCoordinator {
         };
 
         // Simulate each transaction sequentially.
-        let empty_overrides = serde_json::Value::Object(Default::default());
-
         for (tx_index, tx_bytes) in tx_bytes_list.iter().enumerate() {
             let mut success = false;
 
             for attempt in 0..MAX_RESIMULATIONS {
                 match simulator
-                    .simulate(self.chain_id, tx_bytes, &empty_overrides)
+                    .simulate(self.chain_id, tx_bytes, &base_overrides)
                     .await
                 {
                     Ok(result) => {

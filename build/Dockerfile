@@ -1,6 +1,6 @@
 FROM rust:1.88-alpine AS builder
 
-RUN apk add --no-cache musl-dev protobuf-dev
+RUN apk add --no-cache musl-dev protobuf-dev openssl-dev openssl-libs-static
 
 WORKDIR /app
 COPY . .

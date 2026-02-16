@@ -54,13 +54,15 @@ impl QuicClient {
 
     /// Connect to the remote server.
     pub async fn connect(&self) -> Result<(), TransportError> {
-        let addr = self
-            .config
-            .addr
-            .parse()
-            .map_err(|e: std::net::AddrParseError| {
-                TransportError::ConnectionRefused(e.to_string())
-            })?;
+        let mut resolved = tokio::net::lookup_host(&self.config.addr)
+            .await
+            .map_err(|e| TransportError::ConnectionRefused(e.to_string()))?;
+        let addr = resolved.next().ok_or_else(|| {
+            TransportError::ConnectionRefused(format!(
+                "no resolved address for {}",
+                self.config.addr
+            ))
+        })?;
 
         info!(addr = %self.config.addr, "Connecting to remote");
 

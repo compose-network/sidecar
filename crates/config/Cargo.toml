@@ -11,7 +11,4 @@ workspace = true
 
 [dependencies]
 compose-primitives.workspace = true
-config.workspace = true
-serde.workspace = true
-serde_yaml.workspace = true
-thiserror.workspace = true
+clap.workspace = true

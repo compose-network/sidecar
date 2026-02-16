@@ -36,7 +36,10 @@ impl HttpPeerCoordinator {
     fn all_peer_urls(&self, path: &str) -> Vec<(ChainId, String)> {
         self.peers
             .iter()
-            .map(|p| (p.chain_id, format!("http://{}{}", p.addr, path)))
+            .map(|p| {
+                let base = p.addr.trim_end_matches('/');
+                (p.chain_id, format!("{base}{path}"))
+            })
             .collect()
     }
 }

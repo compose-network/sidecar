@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use compose_config::SidecarConfig;
+use clap::Parser;
+use compose_config::SidecarArgs;
 use compose_coordinator::builder::CoordinatorBuilder;
 use compose_coordinator::coordinator::DefaultCoordinator;
 use compose_mailbox::queue::InMemoryQueue;
@@ -27,23 +28,18 @@ use crate::adapters::publisher::QuicPublisherAdapter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "configs/config.yaml".to_string());
+    let args = SidecarArgs::parse();
 
-    let config = compose_config::load(Some(&config_path))?;
-
-    compose_tracing::init(&config.log.level, &config.log.format);
+    compose_tracing::init(&args.log.level, &args.log.format);
 
     info!("Starting sidecar");
 
-    let (coordinator, quic_client) = build_coordinator(&config);
+    let (coordinator, quic_client) = build_coordinator(&args);
 
     coordinator.start().await?;
 
     let coordinator_arc = Arc::new(coordinator);
 
-    // Spawn the publisher QUIC receive loop if publisher is configured.
     if let Some(client) = quic_client {
         spawn_publisher_connection(coordinator_arc.clone(), client);
     }
@@ -51,8 +47,8 @@ async fn main() -> Result<()> {
     let state = AppState::from_arc(coordinator_arc);
     let router = build_router(state);
 
-    let listener = TcpListener::bind(&config.server.listen_addr).await?;
-    info!(addr = %config.server.listen_addr, "HTTP server listening");
+    let listener = TcpListener::bind(&args.server.listen_addr).await?;
+    info!(addr = %args.server.listen_addr, "HTTP server listening");
 
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
@@ -62,72 +58,53 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_coordinator(config: &SidecarConfig) -> (DefaultCoordinator, Option<Arc<QuicClient>>) {
-    let chain_id = config
-        .chains
-        .list
-        .first()
-        .map(|c| c.chain_id())
-        .unwrap_or(compose_primitives::ChainId(0));
+fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<QuicClient>>) {
+    let chain_id = args.chain.chain_id();
 
     let mut builder = CoordinatorBuilder::new(chain_id);
 
-    // Set up simulator from chain RPC configs.
-    let rpc_chains: Vec<ChainRpcConfig> = config
-        .chains
-        .list
-        .iter()
-        .map(|c| ChainRpcConfig {
-            chain_id: c.chain_id(),
-            rpc_url: c.rpc.clone(),
-        })
-        .collect();
-    if !rpc_chains.is_empty() {
+    // Set up simulator if chain RPC is configured.
+    if !args.chain.rpc.is_empty() {
+        let rpc_chains = vec![ChainRpcConfig {
+            chain_id,
+            rpc_url: args.chain.rpc.clone(),
+        }];
         builder = builder.simulator(Arc::new(RpcSimulator::new(rpc_chains)));
     }
 
-    // Set up mailbox queue.
     builder = builder.mailbox_queue(Arc::new(InMemoryQueue::new()));
 
-    // Set up peer coordinator.
-    let peer_coordinator: Option<Arc<HttpPeerCoordinator>> = if !config.peers.sidecars.is_empty() {
-        let peers: Vec<PeerEntry> = config
-            .peers
-            .sidecars
+    // Set up peer coordinator from resolved peer entries.
+    let peer_entries = args.peers.to_entries();
+    if !peer_entries.is_empty() {
+        let peers: Vec<PeerEntry> = peer_entries
             .iter()
             .map(|p| PeerEntry {
-                chain_id: compose_primitives::ChainId(p.chain_id),
+                chain_id: p.chain_id,
                 addr: p.addr.clone(),
             })
             .collect();
         let pc = Arc::new(HttpPeerCoordinator::new(peers));
-        builder = builder.peer_coordinator(pc.clone());
-        Some(pc)
-    } else {
-        None
-    };
+        builder = builder.peer_coordinator(pc);
 
-    // Set up mailbox sender (uses the peer coordinator for HTTP delivery).
-    if peer_coordinator.is_some() {
-        let entries: Vec<PeerEntry> = config
-            .peers
-            .sidecars
+        let mailbox_peers: Vec<compose_peer::coordinator::PeerEntry> = peer_entries
             .iter()
-            .map(|p| PeerEntry {
-                chain_id: compose_primitives::ChainId(p.chain_id),
+            .map(|p| compose_peer::coordinator::PeerEntry {
+                chain_id: p.chain_id,
                 addr: p.addr.clone(),
             })
             .collect();
-        builder =
-            builder.mailbox_sender(Arc::new(PeerMailboxSender::with_peer_entries(&entries)));
+        builder = builder.mailbox_sender(Arc::new(PeerMailboxSender::with_peer_entries(
+            &mailbox_peers,
+        )));
     }
 
     // Set up publisher adapter and QUIC client.
-    let quic_client = if config.publisher.enabled && !config.publisher.addr.is_empty() {
+    let quic_client = if args.publisher.enabled && !args.publisher.addr.is_empty() {
         let client_config = ClientConfig {
-            addr: config.publisher.addr.clone(),
-            reconnect_delay: Duration::from_secs(config.publisher.reconnect_delay_secs),
-            max_retries: config.publisher.max_retries,
+            addr: args.publisher.addr.clone(),
+            reconnect_delay: Duration::from_secs(args.publisher.reconnect_delay_secs),
+            max_retries: args.publisher.max_retries,
             ..Default::default()
         };
         match QuicClient::new(client_config) {

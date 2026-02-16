@@ -56,7 +56,8 @@ impl MailboxSender for PeerMailboxSender {
             )));
         }
 
-        let url = format!("http://{addr}/mailbox");
+        let base = addr.trim_end_matches('/');
+        let url = format!("{base}/mailbox");
         let body = msg.encode_to_vec();
 
         match self

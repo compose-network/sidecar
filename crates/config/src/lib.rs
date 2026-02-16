@@ -1,157 +1,225 @@
-//! Sidecar configuration types and loading entrypoints.
+//! Sidecar configuration via CLI arguments and environment variables.
 //!
-//! Use [`load`] to build [`SidecarConfig`] from YAML plus `SIDECAR_*`
-//! environment-variable overrides.
+//! Uses `clap` with `#[arg(env = "...")]` for env-var mapping.
 
-mod loader;
-
-pub use loader::load;
-
+use clap::Parser;
 use compose_primitives::ChainId;
-use serde::{Deserialize, Serialize};
 
-/// Top-level sidecar configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SidecarConfig {
-    #[serde(default)]
-    pub server: ServerConfig,
-    #[serde(default)]
-    pub publisher: PublisherConfig,
-    #[serde(default)]
-    pub chains: ChainsConfig,
-    #[serde(default)]
-    pub peers: PeersConfig,
-    #[serde(default)]
-    pub log: LogConfig,
+/// Compose sidecar — cross-chain coordination layer.
+#[derive(Debug, Clone, Parser)]
+#[command(name = "sidecar")]
+pub struct SidecarArgs {
+    #[command(flatten)]
+    pub server: ServerArgs,
+
+    #[command(flatten)]
+    pub publisher: PublisherArgs,
+
+    #[command(flatten)]
+    pub chain: ChainArgs,
+
+    #[command(flatten)]
+    pub peers: PeerArgs,
+
+    #[command(flatten)]
+    pub log: LogArgs,
 }
 
-/// HTTP server configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerConfig {
-    #[serde(default = "default_listen_addr")]
+/// HTTP server settings.
+#[derive(Debug, Clone, clap::Args)]
+pub struct ServerArgs {
+    /// HTTP listen address.
+    #[arg(
+        long = "server.listen-addr",
+        env = "SIDECAR_LISTEN_ADDR",
+        default_value = "0.0.0.0:8080"
+    )]
     pub listen_addr: String,
-    #[serde(default = "default_timeout")]
+
+    /// HTTP read timeout in seconds.
+    #[arg(
+        long = "server.read-timeout-secs",
+        env = "SIDECAR_READ_TIMEOUT_SECS",
+        default_value = "30"
+    )]
     pub read_timeout_secs: u64,
-    #[serde(default = "default_timeout")]
+
+    /// HTTP write timeout in seconds.
+    #[arg(
+        long = "server.write-timeout-secs",
+        env = "SIDECAR_WRITE_TIMEOUT_SECS",
+        default_value = "30"
+    )]
     pub write_timeout_secs: u64,
 }
 
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            listen_addr: default_listen_addr(),
-            read_timeout_secs: default_timeout(),
-            write_timeout_secs: default_timeout(),
-        }
-    }
-}
-
-fn default_listen_addr() -> String {
-    "0.0.0.0:8080".to_string()
-}
-
-fn default_timeout() -> u64 {
-    30
-}
-
-/// Publisher (SP) connection configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublisherConfig {
-    #[serde(default)]
-    pub addr: String,
-    #[serde(default = "default_reconnect_delay")]
-    pub reconnect_delay_secs: u64,
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-    #[serde(default)]
+/// Publisher (SP) connection settings.
+#[derive(Debug, Clone, clap::Args)]
+pub struct PublisherArgs {
+    /// Enable publisher connection.
+    #[arg(
+        long = "publisher.enabled",
+        env = "SIDECAR_PUBLISHER_ENABLED",
+        default_value = "false",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = clap::builder::BoolishValueParser::new(),
+    )]
     pub enabled: bool,
+
+    /// Publisher QUIC address.
+    #[arg(
+        long = "publisher.addr",
+        env = "SIDECAR_PUBLISHER_ADDR",
+        default_value = ""
+    )]
+    pub addr: String,
+
+    /// Reconnect delay in seconds.
+    #[arg(
+        long = "publisher.reconnect-delay-secs",
+        env = "SIDECAR_PUBLISHER_RECONNECT_DELAY_SECS",
+        default_value = "5"
+    )]
+    pub reconnect_delay_secs: u64,
+
+    /// Maximum reconnection attempts.
+    #[arg(
+        long = "publisher.max-retries",
+        env = "SIDECAR_PUBLISHER_MAX_RETRIES",
+        default_value = "10"
+    )]
+    pub max_retries: u32,
 }
 
-impl Default for PublisherConfig {
-    fn default() -> Self {
-        Self {
-            addr: String::new(),
-            reconnect_delay_secs: default_reconnect_delay(),
-            max_retries: default_max_retries(),
-            enabled: false,
-        }
-    }
-}
-
-fn default_reconnect_delay() -> u64 {
-    5
-}
-
-fn default_max_retries() -> u32 {
-    10
-}
-
-/// Configuration for the chains this sidecar manages.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ChainsConfig {
-    #[serde(default)]
-    pub list: Vec<ChainConfig>,
-}
-
-/// Individual chain configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainConfig {
+/// Single-chain configuration (one chain per sidecar container).
+#[derive(Debug, Clone, clap::Args)]
+pub struct ChainArgs {
+    /// Chain ID this sidecar manages.
+    #[arg(long = "chain.id", env = "SIDECAR_CHAIN_ID", default_value = "0")]
     pub id: u64,
-    #[serde(default)]
+
+    /// Chain name.
+    #[arg(long = "chain.name", env = "SIDECAR_CHAIN_NAME", default_value = "")]
     pub name: String,
-    #[serde(default)]
+
+    /// Chain RPC endpoint.
+    #[arg(long = "chain.rpc", env = "SIDECAR_CHAIN_RPC", default_value = "")]
     pub rpc: String,
-    #[serde(default)]
+
+    /// Mailbox contract address.
+    #[arg(
+        long = "chain.mailbox-address",
+        env = "SIDECAR_MAILBOX_ADDRESS",
+        default_value = ""
+    )]
     pub mailbox_address: String,
-    #[serde(default)]
+
+    /// Private key for signing putInbox transactions.
+    #[arg(
+        long = "chain.coordinator-key",
+        env = "SIDECAR_COORDINATOR_KEY",
+        default_value = ""
+    )]
     pub coordinator_key: String,
 }
 
-impl ChainConfig {
+impl ChainArgs {
     /// Return the chain ID as a [`ChainId`].
     pub fn chain_id(&self) -> ChainId {
         ChainId(self.id)
     }
 }
 
-/// Peer sidecar configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PeersConfig {
-    #[serde(default)]
-    pub sidecars: Vec<PeerConfig>,
+/// Peer sidecar addresses for CIRC message delivery.
+/// Supports up to 4 named peer slots (A–D).
+#[derive(Debug, Clone, clap::Args)]
+pub struct PeerArgs {
+    /// Peer A sidecar address.
+    #[arg(long = "peer.a.addr", env = "SIDECAR_PEER_A_ADDR")]
+    pub peer_a_addr: Option<String>,
+
+    /// Peer A chain ID.
+    #[arg(long = "peer.a.chain-id", env = "SIDECAR_PEER_A_CHAIN_ID")]
+    pub peer_a_chain_id: Option<u64>,
+
+    /// Peer B sidecar address.
+    #[arg(long = "peer.b.addr", env = "SIDECAR_PEER_B_ADDR")]
+    pub peer_b_addr: Option<String>,
+
+    /// Peer B chain ID.
+    #[arg(long = "peer.b.chain-id", env = "SIDECAR_PEER_B_CHAIN_ID")]
+    pub peer_b_chain_id: Option<u64>,
+
+    /// Peer C sidecar address.
+    #[arg(long = "peer.c.addr", env = "SIDECAR_PEER_C_ADDR")]
+    pub peer_c_addr: Option<String>,
+
+    /// Peer C chain ID.
+    #[arg(long = "peer.c.chain-id", env = "SIDECAR_PEER_C_CHAIN_ID")]
+    pub peer_c_chain_id: Option<u64>,
+
+    /// Peer D sidecar address.
+    #[arg(long = "peer.d.addr", env = "SIDECAR_PEER_D_ADDR")]
+    pub peer_d_addr: Option<String>,
+
+    /// Peer D chain ID.
+    #[arg(long = "peer.d.chain-id", env = "SIDECAR_PEER_D_CHAIN_ID")]
+    pub peer_d_chain_id: Option<u64>,
 }
 
-/// Individual peer sidecar.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PeerConfig {
-    pub chain_id: u64,
+/// A resolved peer entry.
+#[derive(Debug, Clone)]
+pub struct PeerEntry {
+    pub chain_id: ChainId,
     pub addr: String,
 }
 
-/// Logging configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogConfig {
-    #[serde(default = "default_log_level")]
-    pub level: String,
-    #[serde(default = "default_log_format")]
-    pub format: String,
-}
+impl PeerArgs {
+    /// Collect configured peers into a list, skipping slots without an address.
+    /// Uses default chain IDs (901–904) when not explicitly set.
+    pub fn to_entries(&self) -> Vec<PeerEntry> {
+        let slots: [(Option<&str>, Option<u64>, u64); 4] = [
+            (self.peer_a_addr.as_deref(), self.peer_a_chain_id, 901),
+            (self.peer_b_addr.as_deref(), self.peer_b_chain_id, 902),
+            (self.peer_c_addr.as_deref(), self.peer_c_chain_id, 903),
+            (self.peer_d_addr.as_deref(), self.peer_d_chain_id, 904),
+        ];
 
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            level: default_log_level(),
-            format: default_log_format(),
-        }
+        slots
+            .into_iter()
+            .filter_map(|(addr, chain_id, default_id)| {
+                let addr = addr?;
+                if addr.is_empty() {
+                    return None;
+                }
+                Some(PeerEntry {
+                    chain_id: ChainId(chain_id.unwrap_or(default_id)),
+                    addr: addr.to_string(),
+                })
+            })
+            .collect()
     }
 }
 
-fn default_log_level() -> String {
-    "info".to_string()
-}
+/// Logging settings.
+#[derive(Debug, Clone, clap::Args)]
+pub struct LogArgs {
+    /// Log level: debug, info, warn, error.
+    #[arg(
+        long = "log.level",
+        env = "SIDECAR_LOG_LEVEL",
+        default_value = "info"
+    )]
+    pub level: String,
 
-fn default_log_format() -> String {
-    "json".to_string()
+    /// Log format: json or pretty.
+    #[arg(
+        long = "log.format",
+        env = "SIDECAR_LOG_FORMAT",
+        default_value = "json"
+    )]
+    pub format: String,
 }
 
 #[cfg(test)]
@@ -159,35 +227,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_is_valid() {
-        let cfg = SidecarConfig::default();
-        assert_eq!(cfg.server.listen_addr, "0.0.0.0:8080");
-        assert!(!cfg.publisher.enabled);
-        assert_eq!(cfg.log.level, "info");
+    fn default_args_are_valid() {
+        let args = SidecarArgs::parse_from(["sidecar"]);
+        assert_eq!(args.server.listen_addr, "0.0.0.0:8080");
+        assert!(!args.publisher.enabled);
+        assert_eq!(args.chain.id, 0);
+        assert_eq!(args.log.level, "info");
+        assert_eq!(args.log.format, "json");
     }
 
     #[test]
-    fn deserialize_yaml() {
-        let yaml = r#"
-server:
-  listen_addr: "0.0.0.0:9090"
-publisher:
-  addr: "publisher:8080"
-  enabled: true
-chains:
-  list:
-    - id: 901
-      name: "chain-a"
-      rpc: "http://localhost:8545"
-log:
-  level: debug
-  format: pretty
-"#;
-        let cfg: SidecarConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(cfg.server.listen_addr, "0.0.0.0:9090");
-        assert!(cfg.publisher.enabled);
-        assert_eq!(cfg.chains.list.len(), 1);
-        assert_eq!(cfg.chains.list[0].id, 901);
-        assert_eq!(cfg.log.level, "debug");
+    fn cli_args_override_defaults() {
+        let args = SidecarArgs::parse_from([
+            "sidecar",
+            "--server.listen-addr",
+            "0.0.0.0:9090",
+            "--chain.id",
+            "77777",
+            "--chain.rpc",
+            "http://localhost:8545",
+            "--publisher.enabled",
+            "true",
+            "--publisher.addr",
+            "publisher:8080",
+            "--log.level",
+            "debug",
+        ]);
+        assert_eq!(args.server.listen_addr, "0.0.0.0:9090");
+        assert_eq!(args.chain.id, 77777);
+        assert_eq!(args.chain.rpc, "http://localhost:8545");
+        assert!(args.publisher.enabled);
+        assert_eq!(args.publisher.addr, "publisher:8080");
+        assert_eq!(args.log.level, "debug");
+    }
+
+    #[test]
+    fn peer_entries_from_partial_config() {
+        let args = SidecarArgs::parse_from([
+            "sidecar",
+            "--peer.a.addr",
+            "http://sidecar-a:8090",
+            "--peer.a.chain-id",
+            "77777",
+            "--peer.b.addr",
+            "http://sidecar-b:8090",
+        ]);
+        let entries = args.peers.to_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].chain_id, ChainId(77777));
+        assert_eq!(entries[0].addr, "http://sidecar-a:8090");
+        assert_eq!(entries[1].chain_id, ChainId(902)); // default
+        assert_eq!(entries[1].addr, "http://sidecar-b:8090");
+    }
+
+    #[test]
+    fn no_peers_when_none_configured() {
+        let args = SidecarArgs::parse_from(["sidecar"]);
+        assert!(args.peers.to_entries().is_empty());
     }
 }
