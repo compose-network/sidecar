@@ -214,7 +214,7 @@ pub struct BuilderPollRequest {
 pub struct BuilderPollResponse {
     pub hold: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub txs: Vec<TransactionPayload>,
+    pub transactions: Vec<TransactionPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_after_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

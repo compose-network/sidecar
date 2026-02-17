@@ -7,6 +7,9 @@ use std::time::Duration;
 pub struct ClientConfig {
     /// Remote server address (host:port).
     pub addr: String,
+    /// Client identifier sent during the QUIC identification handshake.
+    /// The Go publisher uses this to register the sidecar by chain ID.
+    pub client_id: String,
     /// Duration between reconnection attempts.
     pub reconnect_delay: Duration,
     /// Maximum number of reconnection attempts. 0 = unlimited.
@@ -21,6 +24,7 @@ impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             addr: String::new(),
+            client_id: String::new(),
             reconnect_delay: Duration::from_secs(5),
             max_retries: 10,
             max_message_size: 4 * 1024 * 1024, // 4 MiB

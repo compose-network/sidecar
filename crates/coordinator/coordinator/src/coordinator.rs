@@ -182,6 +182,56 @@ impl DefaultCoordinator {
             .unwrap_or(false)
     }
 
+    /// In standalone mode, compute whether the instance can be decided from the
+    /// currently known local and peer votes.
+    ///
+    /// Rules are aligned with SCP/2PC docs:
+    /// - any `false` vote decides `false` immediately;
+    /// - `true` is decided only when all expected votes are collected.
+    pub(crate) fn maybe_make_standalone_decision(
+        &self,
+        xt: &mut PendingXt,
+    ) -> Option<(bool, usize, usize)> {
+        if xt.decision.is_some() {
+            return None;
+        }
+
+        let expected = xt.raw_txs.len();
+        let mut collected = 0usize;
+        let mut has_abort_vote = false;
+
+        if let Some(local) = xt.local_vote {
+            collected += 1;
+            if !local {
+                has_abort_vote = true;
+            }
+        }
+
+        for (cid, &vote) in &xt.peer_votes {
+            if *cid == self.chain_id {
+                continue;
+            }
+            collected += 1;
+            if !vote {
+                has_abort_vote = true;
+            }
+        }
+
+        if has_abort_vote {
+            xt.decision = Some(false);
+            xt.decided_at = Some(std::time::Instant::now());
+            return Some((false, collected, expected));
+        }
+
+        if expected > 0 && collected >= expected {
+            xt.decision = Some(true);
+            xt.decided_at = Some(std::time::Instant::now());
+            return Some((true, collected, expected));
+        }
+
+        None
+    }
+
     /// Submit a cross-chain transaction.
     ///
     /// In publisher-connected mode, the XT is encoded as an `XtRequest` protobuf

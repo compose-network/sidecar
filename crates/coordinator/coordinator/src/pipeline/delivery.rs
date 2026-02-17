@@ -6,6 +6,7 @@ use compose_primitives::{ChainId, CrossRollupDependency, TransactionPayload};
 #[derive(Debug)]
 pub struct DeliverableXt {
     pub id: String,
+    pub put_inbox_txs: Vec<Vec<u8>>,
     pub raw_txs: Vec<Vec<u8>>,
     pub deps: Vec<CrossRollupDependency>,
 }
@@ -29,6 +30,14 @@ pub fn build_transaction_payloads(deliverable: &[DeliverableXt]) -> Vec<Transact
     let mut payloads = Vec::new();
 
     for entry in deliverable {
+        for put_inbox_tx in &entry.put_inbox_txs {
+            payloads.push(TransactionPayload {
+                raw: format!("0x{}", hex::encode(put_inbox_tx)),
+                required: true,
+                instance_id: entry.id.clone(),
+            });
+        }
+
         for raw_tx in &entry.raw_txs {
             payloads.push(TransactionPayload {
                 raw: format!("0x{}", hex::encode(raw_tx)),

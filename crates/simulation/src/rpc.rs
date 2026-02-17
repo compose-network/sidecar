@@ -4,13 +4,14 @@ use std::collections::HashMap;
 
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::consensus::{Transaction, TxEnvelope};
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes};
 use alloy::rpc::types::eth::TransactionRequest;
 use alloy_rpc_types_eth::state::StateOverride;
 use alloy_rpc_types_trace::geth::{
     CallConfig, GethDebugTracingCallOptions, GethDebugTracingOptions,
 };
 use async_trait::async_trait;
+use compose_mailbox::overrides::{build_mailbox_state_overrides, merge_state_override_values};
 use compose_primitives::{ChainId, CrossRollupDependency, CrossRollupMessage, SimulationResult};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -159,7 +160,7 @@ impl RpcSimulator {
                 receiver: call.receiver,
                 label: call.label.as_bytes().to_vec(),
                 data: None,
-                session_id: call.session_id.map(U256::from),
+                session_id: call.session_id,
             })
             .collect();
 
@@ -173,7 +174,7 @@ impl RpcSimulator {
                 receiver: call.receiver,
                 label: call.label.clone(),
                 data: call.data.clone(),
-                session_id: call.session_id.map(U256::from),
+                session_id: call.session_id,
             })
             .collect();
 
@@ -222,11 +223,19 @@ impl Simulator for RpcSimulator {
         tx: &[u8],
         state_overrides: &Value,
         _already_sent_msgs: &[CrossRollupMessage],
-        _fulfilled_deps: &[CrossRollupDependency],
+        fulfilled_deps: &[CrossRollupDependency],
     ) -> Result<SimulationResult, SimulationError> {
-        // Merge fulfilled dependency state into the override map.
-        // The caller is expected to have prepared the overrides with the
-        // mailbox state already applied. Use the same execution path.
-        self.simulate(chain_id, tx, state_overrides).await
+        let mut merged_overrides = state_overrides.clone();
+
+        if let Some(mailbox_addr) = self.mailbox_address {
+            if let Some(mailbox_overrides) =
+                build_mailbox_state_overrides(chain_id, mailbox_addr, fulfilled_deps)
+            {
+                merged_overrides =
+                    merge_state_override_values(&merged_overrides, &mailbox_overrides);
+            }
+        }
+
+        self.simulate(chain_id, tx, &merged_overrides).await
     }
 }

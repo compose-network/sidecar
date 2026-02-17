@@ -16,14 +16,15 @@ use crate::tls;
 use crate::traits::Transport;
 
 /// QUIC transport client that connects to the shared publisher or peer sidecars.
+///
+/// Each send opens a new stream and writes a single length-prefixed frame.
+/// Incoming messages arrive on server-initiated streams, one frame per stream.
 #[derive(Debug)]
 pub struct QuicClient {
     config: ClientConfig,
     codec: LengthPrefixCodec,
     endpoint: Endpoint,
     connection: Mutex<Option<quinn::Connection>>,
-    send_stream: Mutex<Option<quinn::SendStream>>,
-    recv_stream: Mutex<Option<quinn::RecvStream>>,
     connected: AtomicBool,
 }
 
@@ -46,13 +47,11 @@ impl QuicClient {
             codec,
             endpoint,
             connection: Mutex::new(None),
-            send_stream: Mutex::new(None),
-            recv_stream: Mutex::new(None),
             connected: AtomicBool::new(false),
         }))
     }
 
-    /// Connect to the remote server.
+    /// Connect to the remote server and perform the identification handshake.
     pub async fn connect(&self) -> Result<(), TransportError> {
         let mut resolved = tokio::net::lookup_host(&self.config.addr)
             .await
@@ -72,17 +71,27 @@ impl QuicClient {
             .map_err(|e| TransportError::Quic(e.to_string()))?
             .await?;
 
-        let (send, recv) = conn
+        // Identification handshake: open a stream, send client_id as a
+        // length-prefixed frame, then close it.
+        let mut id_stream = conn
             .open_bi()
             .await
+            .map_err(|e| TransportError::Quic(e.to_string()))?
+            .0;
+
+        let id_frame = self.codec.encode(self.config.client_id.as_bytes())?;
+        id_stream
+            .write_all(&id_frame)
+            .await
+            .map_err(|e| TransportError::Quic(e.to_string()))?;
+        id_stream
+            .finish()
             .map_err(|e| TransportError::Quic(e.to_string()))?;
 
         *self.connection.lock().await = Some(conn);
-        *self.send_stream.lock().await = Some(send);
-        *self.recv_stream.lock().await = Some(recv);
         self.connected.store(true, Ordering::SeqCst);
 
-        info!(addr = %self.config.addr, "Connected");
+        info!(addr = %self.config.addr, client_id = %self.config.client_id, "Connected");
         Ok(())
     }
 
@@ -117,30 +126,51 @@ impl QuicClient {
 
 #[async_trait]
 impl Transport for QuicClient {
+    /// Send a message by opening a fresh stream, writing a single
+    /// length-prefixed frame, then closing the stream.
     async fn send(&self, data: Bytes) -> Result<(), TransportError> {
+        let guard = self.connection.lock().await;
+        let conn = guard.as_ref().ok_or(TransportError::ConnectionClosed)?;
+
+        let mut stream = conn
+            .open_bi()
+            .await
+            .map_err(|e| TransportError::Quic(e.to_string()))?
+            .0;
+
         let frame = self.codec.encode(&data)?;
-        let mut guard = self.send_stream.lock().await;
-        let stream = guard.as_mut().ok_or(TransportError::ConnectionClosed)?;
         stream
             .write_all(&frame)
             .await
             .map_err(|e| TransportError::Quic(e.to_string()))?;
+        stream
+            .finish()
+            .map_err(|e| TransportError::Quic(e.to_string()))?;
+
         Ok(())
     }
 
+    /// Accept the next server-initiated stream and read one length-prefixed
+    /// frame from it.
     async fn recv(&self) -> Result<Bytes, TransportError> {
-        let mut guard = self.recv_stream.lock().await;
-        let stream = guard.as_mut().ok_or(TransportError::ConnectionClosed)?;
+        let conn = {
+            let guard = self.connection.lock().await;
+            guard.as_ref().ok_or(TransportError::ConnectionClosed)?.clone()
+        };
 
-        // Read 4-byte length header.
+        let (_, mut recv_stream) = conn
+            .accept_bi()
+            .await
+            .map_err(|e| TransportError::Quic(e.to_string()))?;
+
         let mut header = [0u8; 4];
-        stream.read_exact(&mut header).await?;
-
+        recv_stream.read_exact(&mut header).await?;
         let len = self.codec.decode_length(&header)?;
 
         let mut payload = vec![0u8; len];
-        stream.read_exact(&mut payload).await?;
+        recv_stream.read_exact(&mut payload).await?;
 
+        debug!(len, "Received message from publisher");
         Ok(Bytes::from(payload))
     }
 

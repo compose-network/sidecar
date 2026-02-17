@@ -22,15 +22,19 @@ pub fn generate_self_signed(
     Ok((vec![cert_der], key_der))
 }
 
+/// ALPN protocol identifier for publisher ↔ sidecar QUIC connections.
+const ALPN_COMPOSE_QUIC: &[u8] = b"compose-quic";
+
 /// Build a `rustls::ClientConfig` that accepts any server certificate.
 ///
 /// This is intentional: the sidecar connects to a known publisher whose
 /// identity is established out of band (config), not via the PKI.
 pub fn insecure_client_config() -> Result<Arc<rustls::ClientConfig>, TransportError> {
-    let config = rustls::ClientConfig::builder()
+    let mut config = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoVerifier))
         .with_no_client_auth();
+    config.alpn_protocols = vec![ALPN_COMPOSE_QUIC.to_vec()];
     Ok(Arc::new(config))
 }
 

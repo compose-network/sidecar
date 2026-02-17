@@ -99,7 +99,7 @@ fn decode_write(input: &str, caller: Address, local_chain_id: ChainId) -> Option
         receiver,
         label: String::from_utf8_lossy(&label).to_string(),
         data: call_data,
-        session_id: Some(session_id.try_into().unwrap_or(0)),
+        session_id: Some(session_id),
     })
 }
 
@@ -128,7 +128,7 @@ fn decode_read(input: &str, caller: Address, local_chain_id: ChainId) -> Option<
         receiver: caller,
         label: String::from_utf8_lossy(&label).to_string(),
         data: Vec::new(),
-        session_id: Some(session_id.try_into().unwrap_or(0)),
+        session_id: Some(session_id),
     })
 }
 

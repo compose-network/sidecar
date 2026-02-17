@@ -1,6 +1,6 @@
 //! Mailbox domain types extracted from simulations.
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use compose_primitives::ChainId;
 
 /// A parsed mailbox call from a call trace.
@@ -13,7 +13,7 @@ pub struct MailboxCall {
     pub receiver: Address,
     pub label: String,
     pub data: Vec<u8>,
-    pub session_id: Option<u64>,
+    pub session_id: Option<U256>,
 }
 
 /// Whether a mailbox call is a read (dependency) or write (outbound message).

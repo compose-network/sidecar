@@ -25,6 +25,7 @@ use tracing::{error, info, warn};
 
 use crate::adapters::mailbox::PeerMailboxSender;
 use crate::adapters::publisher::QuicPublisherAdapter;
+use crate::adapters::put_inbox::AlloyPutInboxBuilder;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -78,6 +79,32 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
         builder = builder.simulator(Arc::new(sim));
     }
 
+    let has_rpc = !args.chain.rpc.is_empty();
+    let has_mailbox = !args.chain.mailbox_address.is_empty();
+    let has_key = !args.chain.coordinator_key.is_empty();
+    if has_rpc && has_mailbox && has_key {
+        match AlloyPutInboxBuilder::new(
+            chain_id,
+            args.chain.rpc.clone(),
+            args.chain.mailbox_address.clone(),
+            args.chain.coordinator_key.clone(),
+        ) {
+            Ok(put_inbox) => {
+                builder = builder.put_inbox_builder(Arc::new(put_inbox));
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to configure putInbox builder");
+            }
+        }
+    } else if has_mailbox || has_key {
+        warn!(
+            has_rpc,
+            has_mailbox,
+            has_coordinator_key = has_key,
+            "putInbox builder disabled due to incomplete chain config"
+        );
+    }
+
     builder = builder.mailbox_queue(Arc::new(InMemoryQueue::new()));
 
     // Set up peer coordinator from resolved peer entries.
@@ -109,6 +136,7 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
     let quic_client = if args.publisher.enabled && !args.publisher.addr.is_empty() {
         let client_config = ClientConfig {
             addr: args.publisher.addr.clone(),
+            client_id: chain_id.0.to_string(),
             reconnect_delay: Duration::from_secs(args.publisher.reconnect_delay_secs),
             max_retries: args.publisher.max_retries,
             ..Default::default()
