@@ -112,6 +112,8 @@ impl RpcSimulator {
             "params": params,
         });
 
+        debug!(chain_id = %chain_id, body = %serde_json::to_string(&body).unwrap_or_default(), "debug_traceCall request");
+
         let resp = self
             .client
             .post(url)
@@ -124,6 +126,8 @@ impl RpcSimulator {
             .json()
             .await
             .map_err(|e| SimulationError::Rpc(e.to_string()))?;
+
+        debug!(chain_id = %chain_id, result = %serde_json::to_string(&result).unwrap_or_default(), "debug_traceCall response");
 
         if let Some(err) = result.get("error") {
             return Err(SimulationError::Rpc(err.to_string()));
@@ -143,14 +147,14 @@ impl RpcSimulator {
             None => return (Vec::new(), Vec::new()),
         };
 
-        let parsed = compose_mailbox::parser::parse_call_trace(trace, mailbox_addr);
+        let parsed = compose_mailbox::parser::parse_call_trace(trace, mailbox_addr, chain_id);
 
         let dependencies = parsed
             .reads
             .iter()
             .map(|call| CrossRollupDependency {
                 source_chain_id: call.source_chain,
-                dest_chain_id: chain_id,
+                dest_chain_id: call.dest_chain,
                 sender: call.sender,
                 receiver: call.receiver,
                 label: call.label.as_bytes().to_vec(),
@@ -163,7 +167,7 @@ impl RpcSimulator {
             .writes
             .iter()
             .map(|call| CrossRollupMessage {
-                source_chain_id: chain_id,
+                source_chain_id: call.source_chain,
                 dest_chain_id: call.dest_chain,
                 sender: call.sender,
                 receiver: call.receiver,

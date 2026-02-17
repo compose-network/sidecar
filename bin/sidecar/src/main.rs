@@ -69,7 +69,13 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
             chain_id,
             rpc_url: args.chain.rpc.clone(),
         }];
-        builder = builder.simulator(Arc::new(RpcSimulator::new(rpc_chains)));
+        let mut sim = RpcSimulator::new(rpc_chains);
+        if !args.chain.mailbox_address.is_empty() {
+            if let Ok(addr) = args.chain.mailbox_address.parse() {
+                sim = sim.with_mailbox_address(addr);
+            }
+        }
+        builder = builder.simulator(Arc::new(sim));
     }
 
     builder = builder.mailbox_queue(Arc::new(InMemoryQueue::new()));
