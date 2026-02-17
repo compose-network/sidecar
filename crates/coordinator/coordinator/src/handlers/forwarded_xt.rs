@@ -6,7 +6,7 @@ use compose_primitives::{ChainId, SequenceNumber};
 use tracing::info;
 
 use crate::coordinator::DefaultCoordinator;
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 use crate::model::pending_xt::PendingXt;
 
 impl DefaultCoordinator {

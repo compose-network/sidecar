@@ -7,10 +7,12 @@ license = "MIT"
 members = [
     "bin/sidecar",
     "crates/primitives",
+    "crates/primitives-traits",
     "crates/proto",
     "crates/config",
     "crates/net/transport",
     "crates/net/peer",
+    "crates/net/publisher",
     "crates/mailbox",
     "crates/simulation",
     "crates/coordinator/coordinator",
@@ -22,10 +24,12 @@ resolver = "2"
 [workspace.dependencies]
 # compose
 compose-primitives = { path = "crates/primitives" }
+compose-primitives-traits = { path = "crates/primitives-traits" }
 compose-proto = { path = "crates/proto" }
 compose-config = { path = "crates/config" }
 compose-transport = { path = "crates/net/transport" }
 compose-peer = { path = "crates/net/peer" }
+compose-publisher = { path = "crates/net/publisher" }
 compose-mailbox = { path = "crates/mailbox" }
 compose-simulation = { path = "crates/simulation" }
 compose-coordinator = { path = "crates/coordinator/coordinator" }

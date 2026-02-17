@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 use crate::model::pending_xt::PendingXt;
 use crate::traits::storage::XtStorage;
 

@@ -1,4 +1,4 @@
-//! Publisher client trait used by the coordinator.
+//! Publisher client trait for SP communication.
 
 use async_trait::async_trait;
 

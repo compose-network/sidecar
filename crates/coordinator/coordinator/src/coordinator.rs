@@ -12,14 +12,12 @@ use prost::Message;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::error::CoordinatorError;
+use compose_primitives_traits::{CoordinatorError, MailboxSender, PublisherClient, PutInboxBuilder};
+
 use crate::model::pending_xt::PendingXt;
 use crate::model::xt_status::{determine_xt_status, XtStatusResponse};
 use crate::nonce_manager::DeferredNonceManager;
 use crate::pipeline::submission::{build_xt_request, xt_request_fingerprint};
-use crate::traits::mailbox::MailboxSender;
-use crate::traits::publisher::PublisherClient;
-use crate::traits::put_inbox::PutInboxBuilder;
 
 /// Shared coordinator state protected by a `RwLock`.
 #[derive(Debug)]

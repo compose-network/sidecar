@@ -1,7 +1,4 @@
-//! Sidecar binary entrypoint and runtime wiring.
-
-mod adapters;
-mod handlers;
+//! Sidecar binary entrypoint.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +8,12 @@ use clap::Parser;
 use compose_config::SidecarArgs;
 use compose_coordinator::builder::CoordinatorBuilder;
 use compose_coordinator::coordinator::DefaultCoordinator;
+use compose_mailbox::put_inbox::PutInboxTxBuilder;
 use compose_mailbox::queue::InMemoryQueue;
 use compose_peer::coordinator::{HttpPeerCoordinator, PeerEntry};
+use compose_peer::sender::PeerMailboxSender;
+use compose_publisher::PublisherConnection;
+use compose_server::handlers::publisher::handle_publisher_message;
 use compose_server::router::build_router;
 use compose_server::state::AppState;
 use compose_simulation::rpc::RpcSimulator;
@@ -22,10 +23,6 @@ use compose_transport::config::ClientConfig;
 use compose_transport::traits::Transport;
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
-
-use crate::adapters::mailbox::PeerMailboxSender;
-use crate::adapters::publisher::QuicPublisherAdapter;
-use crate::adapters::put_inbox::AlloyPutInboxBuilder;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -64,7 +61,6 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
 
     let mut builder = CoordinatorBuilder::new(chain_id);
 
-    // Set up simulator if chain RPC is configured.
     if !args.chain.rpc.is_empty() {
         let rpc_chains = vec![ChainRpcConfig {
             chain_id,
@@ -83,7 +79,7 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
     let has_mailbox = !args.chain.mailbox_address.is_empty();
     let has_key = !args.chain.coordinator_key.is_empty();
     if has_rpc && has_mailbox && has_key {
-        match AlloyPutInboxBuilder::new(
+        match PutInboxTxBuilder::new(
             chain_id,
             args.chain.rpc.clone(),
             args.chain.mailbox_address.clone(),
@@ -107,7 +103,6 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
 
     builder = builder.mailbox_queue(Arc::new(InMemoryQueue::new()));
 
-    // Set up peer coordinator from resolved peer entries.
     let peer_entries = args.peers.to_entries();
     if !peer_entries.is_empty() {
         let peers: Vec<PeerEntry> = peer_entries
@@ -120,9 +115,9 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
         let pc = Arc::new(HttpPeerCoordinator::new(peers));
         builder = builder.peer_coordinator(pc);
 
-        let mailbox_peers: Vec<compose_peer::coordinator::PeerEntry> = peer_entries
+        let mailbox_peers: Vec<PeerEntry> = peer_entries
             .iter()
-            .map(|p| compose_peer::coordinator::PeerEntry {
+            .map(|p| PeerEntry {
                 chain_id: p.chain_id,
                 addr: p.addr.clone(),
             })
@@ -132,7 +127,6 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
         )));
     }
 
-    // Set up publisher adapter and QUIC client.
     let quic_client = if args.publisher.enabled && !args.publisher.addr.is_empty() {
         let client_config = ClientConfig {
             addr: args.publisher.addr.clone(),
@@ -143,8 +137,8 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
         };
         match QuicClient::new(client_config) {
             Ok(client) => {
-                let adapter = QuicPublisherAdapter::new(client.clone(), chain_id);
-                builder = builder.publisher(Arc::new(adapter));
+                let conn = PublisherConnection::new(client.clone(), chain_id);
+                builder = builder.publisher(Arc::new(conn));
                 Some(client)
             }
             Err(e) => {
@@ -159,7 +153,6 @@ fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<Quic
     (builder.build(), quic_client)
 }
 
-/// Connect to the publisher and spawn a background receive loop.
 fn spawn_publisher_connection(coordinator: Arc<DefaultCoordinator>, client: Arc<QuicClient>) {
     tokio::spawn(async move {
         info!("Connecting to publisher");
@@ -174,7 +167,7 @@ fn spawn_publisher_connection(coordinator: Arc<DefaultCoordinator>, client: Arc<
                 Ok(data) => {
                     let coord = coordinator.clone();
                     tokio::spawn(async move {
-                        handlers::publisher::handle_publisher_message(coord, data).await;
+                        handle_publisher_message(coord, data).await;
                     });
                 }
                 Err(e) => {

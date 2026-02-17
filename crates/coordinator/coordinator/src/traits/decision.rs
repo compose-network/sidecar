@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 
 /// Decision handler for determining commit/abort outcomes.
 #[async_trait]

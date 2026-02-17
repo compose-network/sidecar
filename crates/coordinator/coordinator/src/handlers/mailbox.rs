@@ -4,7 +4,7 @@ use compose_proto::rollup_v2::MailboxMessage;
 use tracing::debug;
 
 use crate::coordinator::DefaultCoordinator;
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 
 impl DefaultCoordinator {
     /// Handle an incoming CIRC message from a peer sidecar.

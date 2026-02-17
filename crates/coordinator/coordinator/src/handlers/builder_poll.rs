@@ -4,7 +4,7 @@ use compose_primitives::{BuilderPollRequest, BuilderPollResponse, ChainState};
 use tracing::{debug, error, info};
 
 use crate::coordinator::DefaultCoordinator;
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 use crate::model::ordering::xt_less;
 use crate::pipeline::delivery::{build_transaction_payloads, deps_for_chain, DeliverableXt};
 

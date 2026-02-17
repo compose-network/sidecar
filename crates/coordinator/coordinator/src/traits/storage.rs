@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 use crate::model::pending_xt::PendingXt;
 
 /// Storage backend for pending cross-chain transactions.

@@ -286,7 +286,7 @@ impl DefaultCoordinator {
         &self,
         instance_id: &str,
         outbound_messages: &[CrossRollupMessage],
-    ) -> Result<(), crate::error::CoordinatorError> {
+    ) -> Result<(), compose_primitives_traits::CoordinatorError> {
         if outbound_messages.is_empty() {
             return Ok(());
         }
@@ -344,7 +344,7 @@ impl DefaultCoordinator {
         instance_id: &str,
         _instance_id_bytes: &[u8],
         vote: bool,
-    ) -> Result<(), crate::error::CoordinatorError> {
+    ) -> Result<(), compose_primitives_traits::CoordinatorError> {
         let standalone_mode = !self.is_publisher_connected().await;
         let mut decision_made: Option<(bool, usize, usize)> = None;
 

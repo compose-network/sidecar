@@ -11,12 +11,14 @@ workspace = true
 
 [dependencies]
 compose-primitives.workspace = true
+compose-primitives-traits.workspace = true
 compose-proto.workspace = true
 compose-transport.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+prost.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
 thiserror.workspace = true

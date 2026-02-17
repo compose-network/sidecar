@@ -5,7 +5,7 @@ use std::time::Instant;
 use tracing::info;
 
 use crate::coordinator::DefaultCoordinator;
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 
 impl DefaultCoordinator {
     /// Record a commit/abort decision for an instance.

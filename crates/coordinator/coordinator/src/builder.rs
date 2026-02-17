@@ -7,10 +7,9 @@ use compose_peer::traits::PeerCoordinator;
 use compose_primitives::ChainId;
 use compose_simulation::traits::Simulator;
 
+use compose_primitives_traits::{MailboxSender, PublisherClient, PutInboxBuilder};
+
 use crate::coordinator::DefaultCoordinator;
-use crate::traits::mailbox::MailboxSender;
-use crate::traits::publisher::PublisherClient;
-use crate::traits::put_inbox::PutInboxBuilder;
 
 /// Builder for constructing a [`DefaultCoordinator`] with all its dependencies.
 pub struct CoordinatorBuilder {

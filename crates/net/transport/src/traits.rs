@@ -1,30 +1,24 @@
-//! Transport and message handler trait definitions.
-
 use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::error::TransportError;
 
-/// Bidirectional byte-stream transport used by both the QUIC client and server.
+/// Bidirectional byte-stream transport.
+///
+/// Implementations handle connection lifecycle and framed message exchange.
+/// The protocol (QUIC, TCP, etc.) is an implementation detail.
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
-    /// Send a length-prefixed protobuf message.
+    async fn connect(&self) -> Result<(), TransportError>;
+    async fn connect_with_retry(&self) -> Result<(), TransportError>;
     async fn send(&self, data: Bytes) -> Result<(), TransportError>;
-
-    /// Receive the next length-prefixed message.
     async fn recv(&self) -> Result<Bytes, TransportError>;
-
-    /// Gracefully close the transport.
     async fn close(&self) -> Result<(), TransportError>;
-
-    /// Whether the underlying connection is still open.
     fn is_connected(&self) -> bool;
 }
 
-/// Handler for inbound messages on a transport connection.
+/// Handler for inbound transport messages.
 #[async_trait]
 pub trait MessageHandler: Send + Sync + 'static {
-    /// Process an inbound message. The raw bytes contain a length-prefixed
-    /// protobuf `Message`.
     async fn handle(&self, data: Bytes) -> Result<(), TransportError>;
 }

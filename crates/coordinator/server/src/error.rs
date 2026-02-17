@@ -27,16 +27,16 @@ impl IntoResponse for ServerError {
     }
 }
 
-impl From<compose_coordinator::error::CoordinatorError> for ServerError {
-    fn from(err: compose_coordinator::error::CoordinatorError) -> Self {
+impl From<compose_coordinator::CoordinatorError> for ServerError {
+    fn from(err: compose_coordinator::CoordinatorError) -> Self {
         match err {
-            compose_coordinator::error::CoordinatorError::InstanceNotFound(id) => {
+            compose_coordinator::CoordinatorError::InstanceNotFound(id) => {
                 Self::NotFound(format!("XT not found: {id}"))
             }
-            compose_coordinator::error::CoordinatorError::NoTransactions => {
+            compose_coordinator::CoordinatorError::NoTransactions => {
                 Self::BadRequest("no transactions provided".to_string())
             }
-            compose_coordinator::error::CoordinatorError::PublisherNotConnected => {
+            compose_coordinator::CoordinatorError::PublisherNotConnected => {
                 Self::Internal("publisher not connected".to_string())
             }
             other => Self::Internal(other.to_string()),

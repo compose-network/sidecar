@@ -1,17 +1,20 @@
-use async_trait::async_trait;
+//! Signed `putInbox` transaction builder using alloy.
+
 use alloy::eips::{BlockId, Encodable2718};
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
-use compose_coordinator::error::CoordinatorError;
-use compose_coordinator::traits::put_inbox::PutInboxBuilder;
-use compose_mailbox::builder::encode_put_inbox_calldata;
+use async_trait::async_trait;
 use compose_primitives::{ChainId, CrossRollupDependency};
+use compose_primitives_traits::{CoordinatorError, PutInboxBuilder};
 
+use crate::builder::encode_put_inbox_calldata;
+
+/// Builds signed `putInbox` transactions for cross-rollup dependency delivery.
 #[derive(Clone)]
-pub(crate) struct AlloyPutInboxBuilder {
+pub struct PutInboxTxBuilder {
     chain_id: ChainId,
     rpc_url: String,
     mailbox_address: Address,
@@ -19,9 +22,9 @@ pub(crate) struct AlloyPutInboxBuilder {
     signer_address: Address,
 }
 
-impl std::fmt::Debug for AlloyPutInboxBuilder {
+impl std::fmt::Debug for PutInboxTxBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AlloyPutInboxBuilder")
+        f.debug_struct("PutInboxTxBuilder")
             .field("chain_id", &self.chain_id)
             .field("mailbox_address", &self.mailbox_address)
             .field("signer_address", &self.signer_address)
@@ -29,8 +32,8 @@ impl std::fmt::Debug for AlloyPutInboxBuilder {
     }
 }
 
-impl AlloyPutInboxBuilder {
-    pub(crate) fn new(
+impl PutInboxTxBuilder {
+    pub fn new(
         chain_id: ChainId,
         rpc_url: String,
         mailbox_address: String,
@@ -61,7 +64,7 @@ impl AlloyPutInboxBuilder {
 }
 
 #[async_trait]
-impl PutInboxBuilder for AlloyPutInboxBuilder {
+impl PutInboxBuilder for PutInboxTxBuilder {
     async fn pending_nonce_at(&self) -> Result<u64, CoordinatorError> {
         let url = self
             .rpc_url

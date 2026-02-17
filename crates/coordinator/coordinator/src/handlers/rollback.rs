@@ -6,7 +6,7 @@ use compose_primitives::PeriodId;
 use tracing::warn;
 
 use crate::coordinator::DefaultCoordinator;
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 
 impl DefaultCoordinator {
     /// Abort all undecided instances and reset period state.

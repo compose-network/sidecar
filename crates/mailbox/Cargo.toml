@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 compose-primitives.workspace = true
+compose-primitives-traits.workspace = true
 compose-proto.workspace = true
 tokio.workspace = true
 async-trait.workspace = true

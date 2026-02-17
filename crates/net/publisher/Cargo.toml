@@ -1,0 +1,21 @@
+[package]
+name = "compose-publisher"
+version = "0.1.0"
+description = "Publisher client connection for SP communication"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+compose-primitives.workspace = true
+compose-primitives-traits.workspace = true
+compose-proto.workspace = true
+compose-transport.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+prost.workspace = true
+async-trait.workspace = true
+tracing.workspace = true

@@ -1,26 +1,25 @@
-//! Mailbox sender adapter used by the sidecar binary.
+//! HTTP-based mailbox sender for delivering CIRC messages to peer sidecars.
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use compose_coordinator::error::CoordinatorError;
-use compose_coordinator::traits::mailbox::MailboxSender;
-use compose_peer::coordinator::PeerEntry;
 use compose_primitives::ChainId;
+use compose_primitives_traits::{CoordinatorError, MailboxSender};
 use compose_proto::rollup_v2::MailboxMessage;
 use prost::Message;
 use reqwest::Client;
 use tracing::{error, info};
 
-/// Mailbox sender adapter that forwards CIRC messages to peer sidecars via HTTP.
-pub(crate) struct PeerMailboxSender {
+use crate::coordinator::PeerEntry;
+
+/// Forwards CIRC mailbox messages to peer sidecars via HTTP.
+pub struct PeerMailboxSender {
     client: Client,
-    /// Chain ID -> peer HTTP address mapping.
     peer_addrs: HashMap<ChainId, String>,
 }
 
 impl PeerMailboxSender {
-    pub(crate) fn with_peer_entries(entries: &[PeerEntry]) -> Self {
+    pub fn with_peer_entries(entries: &[PeerEntry]) -> Self {
         let peer_addrs = entries
             .iter()
             .map(|e| (e.chain_id, e.addr.clone()))

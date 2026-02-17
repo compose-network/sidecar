@@ -6,7 +6,7 @@ use compose_primitives::{PeriodId, SuperblockNumber};
 use tracing::info;
 
 use crate::coordinator::DefaultCoordinator;
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 
 impl DefaultCoordinator {
     /// Handle a new period from the publisher. Aborts any stale undecided

@@ -1,5 +1,3 @@
-//! QUIC client transport implementation.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -15,10 +13,11 @@ use crate::framing::LengthPrefixCodec;
 use crate::tls;
 use crate::traits::Transport;
 
-/// QUIC transport client that connects to the shared publisher or peer sidecars.
+/// QUIC transport client.
 ///
-/// Each send opens a new stream and writes a single length-prefixed frame.
-/// Incoming messages arrive on server-initiated streams, one frame per stream.
+/// Each send opens a new bidirectional stream and writes a single
+/// length-prefixed frame. Incoming messages arrive on server-initiated
+/// streams, one frame per stream.
 #[derive(Debug)]
 pub struct QuicClient {
     config: ClientConfig,
@@ -29,7 +28,6 @@ pub struct QuicClient {
 }
 
 impl QuicClient {
-    /// Create a new QUIC client. Does not connect until [`connect`] is called.
     pub fn new(config: ClientConfig) -> Result<Arc<Self>, TransportError> {
         let tls_config = tls::insecure_client_config()?;
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
@@ -50,9 +48,11 @@ impl QuicClient {
             connected: AtomicBool::new(false),
         }))
     }
+}
 
-    /// Connect to the remote server and perform the identification handshake.
-    pub async fn connect(&self) -> Result<(), TransportError> {
+#[async_trait]
+impl Transport for QuicClient {
+    async fn connect(&self) -> Result<(), TransportError> {
         let mut resolved = tokio::net::lookup_host(&self.config.addr)
             .await
             .map_err(|e| TransportError::ConnectionRefused(e.to_string()))?;
@@ -71,8 +71,6 @@ impl QuicClient {
             .map_err(|e| TransportError::Quic(e.to_string()))?
             .await?;
 
-        // Identification handshake: open a stream, send client_id as a
-        // length-prefixed frame, then close it.
         let mut id_stream = conn
             .open_bi()
             .await
@@ -95,8 +93,7 @@ impl QuicClient {
         Ok(())
     }
 
-    /// Connect with automatic retries using the configured backoff.
-    pub async fn connect_with_retry(&self) -> Result<(), TransportError> {
+    async fn connect_with_retry(&self) -> Result<(), TransportError> {
         let max = if self.config.max_retries == 0 {
             u32::MAX
         } else {
@@ -122,12 +119,7 @@ impl QuicClient {
             "failed after {max} attempts",
         )))
     }
-}
 
-#[async_trait]
-impl Transport for QuicClient {
-    /// Send a message by opening a fresh stream, writing a single
-    /// length-prefixed frame, then closing the stream.
     async fn send(&self, data: Bytes) -> Result<(), TransportError> {
         let guard = self.connection.lock().await;
         let conn = guard.as_ref().ok_or(TransportError::ConnectionClosed)?;
@@ -150,8 +142,6 @@ impl Transport for QuicClient {
         Ok(())
     }
 
-    /// Accept the next server-initiated stream and read one length-prefixed
-    /// frame from it.
     async fn recv(&self) -> Result<Bytes, TransportError> {
         let conn = {
             let guard = self.connection.lock().await;
@@ -170,7 +160,7 @@ impl Transport for QuicClient {
         let mut payload = vec![0u8; len];
         recv_stream.read_exact(&mut payload).await?;
 
-        debug!(len, "Received message from publisher");
+        debug!(len, "Received message");
         Ok(Bytes::from(payload))
     }
 

@@ -1,40 +1,41 @@
-//! Publisher transport adapter implementing coordinator publisher traits.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use compose_coordinator::error::CoordinatorError;
-use compose_coordinator::traits::publisher::PublisherClient;
 use compose_primitives::ChainId;
+use compose_primitives_traits::{CoordinatorError, PublisherClient};
 use compose_proto::conversions::chain_id_to_bytes;
 use compose_proto::rollup_v2::{wire_message, Vote, WireMessage, XtId};
-use compose_transport::client::QuicClient;
 use compose_transport::traits::Transport;
 use prost::Message;
 
-/// Publisher adapter bridging the QUIC transport to the coordinator's
-/// `PublisherClient` trait.
-pub(crate) struct QuicPublisherAdapter {
-    client: Arc<QuicClient>,
+/// Publisher connection implementing the `PublisherClient` trait.
+///
+/// Transport-agnostic: works with any `Transport` implementation (QUIC, TCP, etc.).
+pub struct PublisherConnection {
+    transport: Arc<dyn Transport>,
     connected: AtomicBool,
     chain_id: ChainId,
 }
 
-impl QuicPublisherAdapter {
-    pub(crate) fn new(client: Arc<QuicClient>, chain_id: ChainId) -> Self {
+impl PublisherConnection {
+    pub fn new(transport: Arc<dyn Transport>, chain_id: ChainId) -> Self {
         Self {
-            client,
+            transport,
             connected: AtomicBool::new(false),
             chain_id,
         }
     }
+
+    pub fn transport(&self) -> &Arc<dyn Transport> {
+        &self.transport
+    }
 }
 
-impl std::fmt::Debug for QuicPublisherAdapter {
+impl std::fmt::Debug for PublisherConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QuicPublisherAdapter")
+        f.debug_struct("PublisherConnection")
             .field("connected", &self.connected.load(Ordering::SeqCst))
             .field("chain_id", &self.chain_id)
             .finish()
@@ -42,9 +43,9 @@ impl std::fmt::Debug for QuicPublisherAdapter {
 }
 
 #[async_trait]
-impl PublisherClient for QuicPublisherAdapter {
+impl PublisherClient for PublisherConnection {
     async fn connect(&self) -> Result<(), CoordinatorError> {
-        self.client
+        self.transport
             .connect()
             .await
             .map_err(|e| CoordinatorError::Other(e.to_string()))?;
@@ -53,7 +54,7 @@ impl PublisherClient for QuicPublisherAdapter {
     }
 
     async fn connect_with_retry(&self) -> Result<(), CoordinatorError> {
-        self.client
+        self.transport
             .connect_with_retry()
             .await
             .map_err(|e| CoordinatorError::Other(e.to_string()))?;
@@ -63,7 +64,7 @@ impl PublisherClient for QuicPublisherAdapter {
 
     async fn disconnect(&self) -> Result<(), CoordinatorError> {
         self.connected.store(false, Ordering::SeqCst);
-        self.client
+        self.transport
             .close()
             .await
             .map_err(|e| CoordinatorError::Other(e.to_string()))?;
@@ -82,24 +83,20 @@ impl PublisherClient for QuicPublisherAdapter {
             })),
         };
 
-        let data = msg.encode_to_vec();
-        self.client
-            .send(Bytes::from(data))
+        self.transport
+            .send(Bytes::from(msg.encode_to_vec()))
             .await
-            .map_err(|e| CoordinatorError::Other(e.to_string()))?;
-
-        Ok(())
+            .map_err(|e| CoordinatorError::Other(e.to_string()))
     }
 
     async fn send_raw(&self, data: &[u8]) -> Result<(), CoordinatorError> {
-        self.client
+        self.transport
             .send(Bytes::copy_from_slice(data))
             .await
-            .map_err(|e| CoordinatorError::Other(e.to_string()))?;
-        Ok(())
+            .map_err(|e| CoordinatorError::Other(e.to_string()))
     }
 
     fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::SeqCst) && self.client.is_connected()
+        self.connected.load(Ordering::SeqCst) && self.transport.is_connected()
     }
 }

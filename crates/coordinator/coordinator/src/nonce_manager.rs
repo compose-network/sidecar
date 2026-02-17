@@ -4,7 +4,7 @@ use std::future::Future;
 
 use tokio::sync::Mutex;
 
-use crate::error::CoordinatorError;
+use compose_primitives_traits::CoordinatorError;
 
 /// Deferred nonce manager that assigns nonces at delivery time.
 ///

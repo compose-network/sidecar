@@ -9,6 +9,7 @@ pub mod error;
 pub mod matching;
 pub mod overrides;
 pub mod parser;
+pub mod put_inbox;
 pub mod queue;
 pub mod traits;
 pub mod types;

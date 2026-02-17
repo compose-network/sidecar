@@ -1,3 +1,5 @@
-pub mod adapter;
+//! Publisher client connection for SP communication.
 
-pub use adapter::QuicPublisherAdapter;
+mod connection;
+
+pub use connection::PublisherConnection;

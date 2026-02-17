@@ -1,4 +1,4 @@
-//! Publisher message handling for inbound control-plane events.
+//! Publisher message dispatch for inbound control-plane events.
 
 use std::sync::Arc;
 
@@ -9,8 +9,8 @@ use compose_proto::rollup_v2::{wire_message, WireMessage};
 use prost::Message;
 use tracing::{debug, error, warn};
 
-/// Process an inbound message from the publisher QUIC connection.
-pub(crate) async fn handle_publisher_message(coordinator: Arc<DefaultCoordinator>, data: Bytes) {
+/// Dispatch an inbound protobuf message from the publisher connection.
+pub async fn handle_publisher_message(coordinator: Arc<DefaultCoordinator>, data: Bytes) {
     let msg = match WireMessage::decode(data) {
         Ok(m) => m,
         Err(e) => {
