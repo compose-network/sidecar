@@ -1,10 +1,11 @@
 //! In-memory representation of a pending cross-chain transaction.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use compose_primitives::{
     ChainId, ChainState, CrossRollupDependency, CrossRollupMessage, PeriodId, SequenceNumber,
+    StateOverride,
 };
 use compose_proto::rollup_v2::MailboxMessage;
 
@@ -25,8 +26,8 @@ pub struct PendingXt {
     pub raw_txs: HashMap<ChainId, Vec<Vec<u8>>>,
     /// Chain state snapshots from builder polls.
     pub chain_states: HashMap<ChainId, ChainState>,
-    /// State overrides accumulated during simulation.
-    pub state_overrides: HashMap<ChainId, serde_json::Value>,
+    /// State overrides accumulated during simulation, keyed by chain.
+    pub state_overrides: HashMap<ChainId, StateOverride>,
 
     /// When the XT was created.
     pub created_at: Instant,
@@ -44,8 +45,8 @@ pub struct PendingXt {
     /// Votes received from peer sidecars.
     pub peer_votes: HashMap<ChainId, bool>,
 
-    /// Which chains are currently locked (being simulated).
-    pub locked_chains: HashMap<ChainId, bool>,
+    /// Chains that are currently locked (being simulated).
+    pub locked_chains: HashSet<ChainId>,
 
     /// Origin chain for standalone-mode XTs.
     pub origin_chain: Option<ChainId>,
@@ -64,7 +65,7 @@ pub struct PendingXt {
     pub outbound_messages: Vec<CrossRollupMessage>,
 
     /// Chains to which committed transactions have been delivered.
-    pub delivered_chains: HashMap<ChainId, bool>,
+    pub delivered_chains: HashSet<ChainId>,
 }
 
 impl PendingXt {
@@ -84,7 +85,7 @@ impl PendingXt {
             vote_sent: false,
             local_vote: None,
             peer_votes: HashMap::new(),
-            locked_chains: HashMap::new(),
+            locked_chains: HashSet::new(),
             origin_chain: None,
             origin_seq: SequenceNumber(0),
             pending_mailbox: Vec::new(),
@@ -92,7 +93,7 @@ impl PendingXt {
             dependencies: Vec::new(),
             fulfilled_deps: Vec::new(),
             outbound_messages: Vec::new(),
-            delivered_chains: HashMap::new(),
+            delivered_chains: HashSet::new(),
         }
     }
 

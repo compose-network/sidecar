@@ -10,6 +10,7 @@ use compose_coordinator::builder::CoordinatorBuilder;
 use compose_coordinator::coordinator::DefaultCoordinator;
 use compose_mailbox::put_inbox::PutInboxTxBuilder;
 use compose_mailbox::queue::InMemoryQueue;
+use compose_metrics::SidecarMetrics;
 use compose_peer::coordinator::{HttpPeerCoordinator, PeerEntry};
 use compose_peer::sender::PeerMailboxSender;
 use compose_publisher::PublisherConnection;
@@ -21,6 +22,7 @@ use compose_simulation::types::ChainRpcConfig;
 use compose_transport::client::QuicClient;
 use compose_transport::config::ClientConfig;
 use compose_transport::traits::Transport;
+use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
@@ -32,7 +34,10 @@ async fn main() -> Result<()> {
 
     info!("Starting sidecar");
 
-    let (coordinator, quic_client) = build_coordinator(&args);
+    let mut registry = Registry::default();
+    let metrics = Arc::new(SidecarMetrics::new(&mut registry));
+
+    let (coordinator, quic_client) = build_coordinator(&args, metrics);
 
     coordinator.start().await?;
 
@@ -42,7 +47,7 @@ async fn main() -> Result<()> {
         spawn_publisher_connection(coordinator_arc.clone(), client);
     }
 
-    let state = AppState::from_arc(coordinator_arc);
+    let state = AppState::from_arc(coordinator_arc).with_registry(registry);
     let router = build_router(state);
 
     let listener = TcpListener::bind(&args.server.listen_addr).await?;
@@ -56,10 +61,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_coordinator(args: &SidecarArgs) -> (DefaultCoordinator, Option<Arc<QuicClient>>) {
+fn build_coordinator(
+    args: &SidecarArgs,
+    metrics: Arc<SidecarMetrics>,
+) -> (DefaultCoordinator, Option<Arc<QuicClient>>) {
     let chain_id = args.chain.chain_id();
 
-    let mut builder = CoordinatorBuilder::new(chain_id);
+    let mut builder = CoordinatorBuilder::new(chain_id).metrics(metrics);
 
     if !args.chain.rpc.is_empty() {
         let rpc_chains = vec![ChainRpcConfig {

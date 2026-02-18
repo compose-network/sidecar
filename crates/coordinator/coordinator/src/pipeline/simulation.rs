@@ -1,18 +1,18 @@
 //! Simulation pipeline and vote emission flow.
 
-use std::time::Duration;
+use std::time::{Duration, Instant as StdInstant};
 
 use compose_mailbox::matching::{contains_message, dep_key, matches_dependency};
-use compose_primitives::{ChainId, CrossRollupDependency, CrossRollupMessage};
+use compose_mailbox::overrides::merge_overrides;
+use compose_primitives::{ChainId, CrossRollupDependency, CrossRollupMessage, StateOverride};
 use compose_proto::rollup_v2::MailboxMessage;
 use tokio::time::{sleep, Instant};
 use tracing::{debug, error, info, warn};
 
 use crate::coordinator::DefaultCoordinator;
+use crate::model::chain_overlay::ChainOverlay;
 use crate::model::pending_xt::PendingXt;
 
-/// Maximum number of resimulation attempts per transaction.
-const MAX_RESIMULATIONS: usize = 3;
 const MAILBOX_POLL_INTERVAL_MS: u64 = 50;
 
 fn same_mailbox_message(a: &MailboxMessage, b: &MailboxMessage) -> bool {
@@ -53,17 +53,38 @@ impl DefaultCoordinator {
                             num_chain_states = xt.chain_states.len(),
                             "Simulation state check"
                         );
-                        let overrides = xt
+                        // Start from the builder-provided overrides for this chain,
+                        // then layer in any accumulated overlay from prior committed XTs
+                        // in the same block/flashblock window.
+                        let mut overrides = xt
                             .chain_states
                             .get(&self.chain_id)
                             .and_then(|cs| cs.state_overrides.clone())
-                            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                            .unwrap_or_default();
+
+                        // Apply chain overlay from prior committed XTs.
+                        if let Some(chain_overlay) = state.chain_overlay.get(&self.chain_id) {
+                            let block_number = xt
+                                .chain_states
+                                .get(&self.chain_id)
+                                .map(|cs| cs.block_number)
+                                .unwrap_or(0);
+                            let flashblock_index = xt
+                                .chain_states
+                                .get(&self.chain_id)
+                                .map(|cs| cs.flashblock_index)
+                                .unwrap_or(0);
+                            if chain_overlay.matches(block_number, flashblock_index) {
+                                merge_overrides(&mut overrides, &chain_overlay.overlay);
+                            }
+                        }
+
                         (txs.clone(), overrides)
                     }
                     _ => {
                         warn!(instance_id, "No local transactions, rejecting");
                         drop(state);
-                        let _ = self.send_vote(instance_id, &[], false).await;
+                        let _ = self.send_vote(instance_id, false).await;
                         return;
                     }
                 },
@@ -75,7 +96,7 @@ impl DefaultCoordinator {
         {
             let mut state = self.state.write().await;
             if let Some(xt) = state.pending.get_mut(instance_id) {
-                xt.locked_chains.insert(self.chain_id, true);
+                xt.locked_chains.insert(self.chain_id);
             }
         }
 
@@ -83,16 +104,16 @@ impl DefaultCoordinator {
             Some(s) => s.clone(),
             None => {
                 warn!("No simulator configured, voting yes without simulation");
-                let _ = self.send_vote(instance_id, &[], true).await;
+                let _ = self.send_vote(instance_id, true).await;
                 return;
             }
         };
 
         // Simulate each transaction sequentially.
         for (tx_index, tx_bytes) in tx_bytes_list.iter().enumerate() {
-            let mut success = false;
-
-            for attempt in 0..MAX_RESIMULATIONS {
+            // Retry simulation until success or CIRC timeout. The
+            // wait_for_dependencies deadline is the only bound on the loop.
+            loop {
                 let (already_sent_msgs, fulfilled_deps) = {
                     let state = self.state.read().await;
                     match state.pending.get(instance_id) {
@@ -101,7 +122,8 @@ impl DefaultCoordinator {
                     }
                 };
 
-                match simulator
+                let sim_start = StdInstant::now();
+                let sim_result = simulator
                     .simulate_with_mailbox(
                         self.chain_id,
                         tx_bytes,
@@ -109,8 +131,11 @@ impl DefaultCoordinator {
                         &already_sent_msgs,
                         &fulfilled_deps,
                     )
-                    .await
-                {
+                    .await;
+                if let Some(m) = &self.metrics {
+                    m.simulation_duration_seconds.observe(sim_start.elapsed().as_secs_f64());
+                }
+                match sim_result {
                     Ok(result) => {
                         current_overrides = self
                             .record_simulation_state(instance_id, &result, &current_overrides)
@@ -123,7 +148,7 @@ impl DefaultCoordinator {
                                 error = ?result.error,
                                 "Simulation returned failure with no dependencies"
                             );
-                            let _ = self.send_vote(instance_id, &[], false).await;
+                            let _ = self.send_vote(instance_id, false).await;
                             return;
                         }
 
@@ -133,17 +158,15 @@ impl DefaultCoordinator {
                                 .await
                             {
                                 error!(instance_id, error = %e, "Failed to dispatch mailbox messages");
-                                let _ = self.send_vote(instance_id, &[], false).await;
+                                let _ = self.send_vote(instance_id, false).await;
                                 return;
                             }
-                            success = true;
                             break;
                         }
 
                         info!(
                             instance_id,
                             tx_index,
-                            attempt = attempt + 1,
                             dep_count = result.dependencies.len(),
                             "Simulation waiting for mailbox dependencies"
                         );
@@ -156,48 +179,41 @@ impl DefaultCoordinator {
                                 instance_id,
                                 tx_index, "Timed out waiting for mailbox dependencies"
                             );
-                            let _ = self.send_vote(instance_id, &[], false).await;
+                            let _ = self.send_vote(instance_id, false).await;
                             return;
                         }
                     }
                     Err(e) => {
                         error!(instance_id, error = %e, "Simulation failed");
-                        let _ = self.send_vote(instance_id, &[], false).await;
+                        let _ = self.send_vote(instance_id, false).await;
                         return;
                     }
                 }
             }
-
-            if !success {
-                warn!(
-                    instance_id,
-                    tx_index, "Simulation failed after max attempts"
-                );
-                let _ = self.send_vote(instance_id, &[], false).await;
-                return;
-            }
         }
 
-        let _ = self.send_vote(instance_id, &[], true).await;
+        let _ = self.send_vote(instance_id, true).await;
     }
 
+    /// Record simulation results into XT state, update the chain overlay with
+    /// the post-simulation overrides so subsequent XTs see the committed state,
+    /// and return the merged overrides for the next simulation step.
     async fn record_simulation_state(
         &self,
         instance_id: &str,
         result: &compose_primitives::SimulationResult,
-        base_overrides: &serde_json::Value,
-    ) -> serde_json::Value {
+        base_overrides: &StateOverride,
+    ) -> StateOverride {
         let mut state = self.state.write().await;
         let Some(xt) = state.pending.get_mut(instance_id) else {
             return base_overrides.clone();
         };
 
-        let merged_overrides = result
-            .state_overrides
-            .clone()
-            .unwrap_or_else(|| base_overrides.clone());
-        xt.state_overrides
-            .insert(self.chain_id, merged_overrides.clone());
+        let mut merged_overrides = base_overrides.clone();
+        if let Some(ref result_overrides) = result.state_overrides {
+            merge_overrides(&mut merged_overrides, result_overrides);
+        }
+        xt.state_overrides.insert(self.chain_id, merged_overrides.clone());
 
         for dep in &result.dependencies {
             if !xt
@@ -215,9 +231,31 @@ impl DefaultCoordinator {
             }
         }
 
+        // Update the chain overlay for this block/flashblock window so that the
+        // next XT simulated on this chain sees the accumulated post-simulation state.
+        if result.success {
+            let (block_number, flashblock_index) = xt
+                .chain_states
+                .get(&self.chain_id)
+                .map(|cs| (cs.block_number, cs.flashblock_index))
+                .unwrap_or((0, 0));
+
+            let overlay = state.chain_overlay.entry(self.chain_id).or_insert_with(|| {
+                ChainOverlay::new(block_number, flashblock_index)
+            });
+            // Reset overlay when moving to a new block/flashblock window.
+            if !overlay.matches(block_number, flashblock_index) {
+                *overlay = ChainOverlay::new(block_number, flashblock_index);
+            }
+            merge_overrides(&mut overlay.overlay, &merged_overrides);
+        }
+
         merged_overrides
     }
 
+    /// Poll the pending mailbox until at least one dependency is fulfilled, or
+    /// the CIRC timeout expires. The timeout is the authoritative bound;
+    /// callers should not impose additional retry limits on top of this.
     async fn wait_for_dependencies(
         &self,
         instance_id: &str,
@@ -331,8 +369,16 @@ impl DefaultCoordinator {
             }
         }
 
+        let sent_count = to_send.len();
         for msg in to_send {
             sender.send(ChainId(msg.destination_chain), &msg).await?;
+        }
+        if sent_count > 0 {
+            if let Some(m) = &self.metrics {
+                for _ in 0..sent_count {
+                    m.circ_messages_sent_total.inc();
+                }
+            }
         }
 
         Ok(())
@@ -342,7 +388,6 @@ impl DefaultCoordinator {
     pub(crate) async fn send_vote(
         &self,
         instance_id: &str,
-        _instance_id_bytes: &[u8],
         vote: bool,
     ) -> Result<(), compose_primitives_traits::CoordinatorError> {
         let standalone_mode = !self.is_publisher_connected().await;
@@ -368,7 +413,7 @@ impl DefaultCoordinator {
             xt.simulated_at = Some(std::time::Instant::now());
             xt.vote_sent = true;
             xt.local_vote = Some(vote);
-            xt.locked_chains.insert(self.chain_id, true);
+            xt.locked_chains.insert(self.chain_id);
             if standalone_mode {
                 decision_made = self.maybe_make_standalone_decision(xt);
             }
@@ -405,7 +450,7 @@ impl DefaultCoordinator {
                 let chain_id = self.chain_id;
                 let id = instance_id.to_string();
                 let pc = peer_coord.clone();
-                tokio::spawn(async move {
+                self.task_tracker.spawn(async move {
                     if let Err(e) = pc.send_vote_to_peers(&id, chain_id, vote).await {
                         error!(instance_id = %id, error = %e, "Failed to send vote to peers");
                     }
@@ -445,8 +490,8 @@ mod tests {
             );
         }
 
-        coordinator.send_vote("xt-77777-1", b"xt-77777-1", true).await.unwrap();
-        coordinator.send_vote("xt-77777-1", b"xt-77777-1", false).await.unwrap();
+        coordinator.send_vote("xt-77777-1", true).await.unwrap();
+        coordinator.send_vote("xt-77777-1", false).await.unwrap();
 
         let state = coordinator.state.read().await;
         let xt = state.pending.get("xt-77777-1").unwrap();
@@ -475,7 +520,7 @@ mod tests {
             state.pending.insert("xt-77777-2".to_string(), xt);
         }
 
-        coordinator.send_vote("xt-77777-2", b"xt-77777-2", true).await.unwrap();
+        coordinator.send_vote("xt-77777-2", true).await.unwrap();
 
         let state = coordinator.state.read().await;
         let xt = state.pending.get("xt-77777-2").unwrap();
@@ -505,11 +550,152 @@ mod tests {
             state.pending.insert("xt-77777-3".to_string(), xt);
         }
 
-        coordinator.send_vote("xt-77777-3", b"xt-77777-3", true).await.unwrap();
+        coordinator.send_vote("xt-77777-3", true).await.unwrap();
 
         let state = coordinator.state.read().await;
         let xt = state.pending.get("xt-77777-3").unwrap();
         assert_eq!(xt.local_vote, Some(true));
         assert_eq!(xt.decision, Some(false));
+    }
+
+    use async_trait::async_trait;
+    use compose_primitives::{CrossRollupDependency, CrossRollupMessage, SimulationResult};
+    use compose_simulation::error::SimulationError;
+    use compose_simulation::traits::Simulator;
+    use compose_primitives::StateOverride;
+    use std::sync::Arc;
+
+    /// Simple stub simulator for testing: always returns success or always fails.
+    struct StubSimulator {
+        succeed: bool,
+    }
+
+    #[async_trait]
+    impl Simulator for StubSimulator {
+        async fn simulate(
+            &self,
+            _chain_id: ChainId,
+            _tx: &[u8],
+            _state_overrides: &StateOverride,
+        ) -> Result<SimulationResult, SimulationError> {
+            if self.succeed {
+                Ok(SimulationResult {
+                    success: true,
+                    error: None,
+                    state_overrides: None,
+                    dependencies: Vec::new(),
+                    outbound_messages: Vec::new(),
+                })
+            } else {
+                Err(SimulationError::Failed("stub failure".to_string()))
+            }
+        }
+
+        async fn simulate_with_mailbox(
+            &self,
+            chain_id: ChainId,
+            tx: &[u8],
+            state_overrides: &StateOverride,
+            _already_sent_msgs: &[CrossRollupMessage],
+            _fulfilled_deps: &[CrossRollupDependency],
+        ) -> Result<SimulationResult, SimulationError> {
+            self.simulate(chain_id, tx, state_overrides).await
+        }
+    }
+
+    #[tokio::test]
+    async fn process_xt_votes_true_on_success_with_no_deps() {
+        let simulator = Arc::new(StubSimulator { succeed: true });
+        let coordinator = DefaultCoordinator::new(
+            ChainId(77777),
+            Some(simulator),
+            None,
+            None,
+            None,
+            None,
+            None,
+            1000,
+        );
+
+        {
+            let mut state = coordinator.state.write().await;
+            let mut xt = PendingXt::new("xt-77777-10".to_string(), b"xt-77777-10".to_vec());
+            xt.raw_txs.insert(ChainId(77777), vec![vec![0xab, 0xcd]]);
+            state.pending.insert("xt-77777-10".to_string(), xt);
+        }
+
+        let xt_snapshot = {
+            let state = coordinator.state.read().await;
+            state.pending["xt-77777-10"].clone()
+        };
+        coordinator.process_xt("xt-77777-10", &xt_snapshot).await;
+
+        let state = coordinator.state.read().await;
+        let xt = state.pending.get("xt-77777-10").unwrap();
+        assert_eq!(xt.local_vote, Some(true));
+    }
+
+    #[tokio::test]
+    async fn process_xt_votes_false_on_simulation_error() {
+        let simulator = Arc::new(StubSimulator { succeed: false });
+        let coordinator = DefaultCoordinator::new(
+            ChainId(77777),
+            Some(simulator),
+            None,
+            None,
+            None,
+            None,
+            None,
+            1000,
+        );
+
+        {
+            let mut state = coordinator.state.write().await;
+            let mut xt = PendingXt::new("xt-77777-11".to_string(), b"xt-77777-11".to_vec());
+            xt.raw_txs.insert(ChainId(77777), vec![vec![0xde, 0xad]]);
+            state.pending.insert("xt-77777-11".to_string(), xt);
+        }
+
+        let xt_snapshot = {
+            let state = coordinator.state.read().await;
+            state.pending["xt-77777-11"].clone()
+        };
+        coordinator.process_xt("xt-77777-11", &xt_snapshot).await;
+
+        let state = coordinator.state.read().await;
+        let xt = state.pending.get("xt-77777-11").unwrap();
+        assert_eq!(xt.local_vote, Some(false));
+    }
+
+    #[tokio::test]
+    async fn process_xt_votes_false_when_no_local_txs() {
+        let coordinator = DefaultCoordinator::new(
+            ChainId(77777),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1000,
+        );
+
+        {
+            let mut state = coordinator.state.write().await;
+            // XT has transactions only for a different chain.
+            let mut xt = PendingXt::new("xt-77777-12".to_string(), b"xt-77777-12".to_vec());
+            xt.raw_txs.insert(ChainId(88888), vec![vec![0xff]]);
+            state.pending.insert("xt-77777-12".to_string(), xt);
+        }
+
+        let xt_snapshot = {
+            let state = coordinator.state.read().await;
+            state.pending["xt-77777-12"].clone()
+        };
+        coordinator.process_xt("xt-77777-12", &xt_snapshot).await;
+
+        let state = coordinator.state.read().await;
+        let xt = state.pending.get("xt-77777-12").unwrap();
+        assert_eq!(xt.local_vote, Some(false));
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "compose-metrics"
+version = "0.1.0"
+description = "Prometheus metrics for the sidecar"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+prometheus-client.workspace = true

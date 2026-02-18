@@ -15,6 +15,7 @@ members = [
     "crates/net/publisher",
     "crates/mailbox",
     "crates/simulation",
+    "crates/metrics",
     "crates/coordinator/coordinator",
     "crates/coordinator/server",
     "crates/tracing",
@@ -34,11 +35,12 @@ compose-mailbox = { path = "crates/mailbox" }
 compose-simulation = { path = "crates/simulation" }
 compose-coordinator = { path = "crates/coordinator/coordinator" }
 compose-server = { path = "crates/coordinator/server" }
+compose-metrics = { path = "crates/metrics" }
 compose-tracing = { path = "crates/tracing" }
 
 # Async
 tokio = { version = "1.43", features = ["full"] }
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 futures = "0.3"
 
@@ -53,6 +55,7 @@ alloy = { version = "1.0", features = [
     "signers", "signer-local", "providers", "provider-http",
     "rpc-types", "rlp", "k256",
 ] }
+alloy-rpc-types-eth = "1.1.2"
 
 # Protobuf
 prost = "0.13"
@@ -86,6 +89,7 @@ hex = "0.4"
 
 # Misc
 bytes = "1.0"
+prometheus-client = "0.22"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"

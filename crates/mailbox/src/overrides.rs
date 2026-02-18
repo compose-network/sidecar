@@ -1,92 +1,60 @@
-//! State override parsing, cloning, and merge helpers.
+//! State override merge helpers for mailbox interactions.
 
-use alloy::primitives::{keccak256, Address, B256, U256};
+use alloy::primitives::{keccak256, map::FbBuildHasher, Address, B256, U256};
+use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
 use compose_primitives::{ChainId, CrossRollupDependency};
-use serde_json::Value;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 const INBOX_MAPPING_SLOT: u64 = 4;
 const CREATED_KEYS_MAPPING_SLOT: u64 = 6;
 
-/// Parse state overrides from a JSON value into a map.
-pub fn parse_state_overrides(value: &Option<Value>) -> HashMap<String, Value> {
-    match value {
-        Some(Value::Object(map)) => map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        _ => HashMap::new(),
-    }
-}
+/// Alloy's state-diff map type: B256 keys with a fixed-bytes hasher.
+type SlotMap = HashMap<B256, B256, FbBuildHasher<32>>;
 
-/// Clone a state override map.
-pub fn clone_state_overrides(overrides: &HashMap<String, Value>) -> HashMap<String, Value> {
-    overrides.clone()
-}
+/// Merge `overlay` into `base`, with `overlay` taking precedence per address.
+///
+/// For `state` vs `stateDiff`:
+/// - An overlay `state` (full replacement) replaces any existing `state` or
+///   `stateDiff` for the same address.
+/// - An overlay `stateDiff` is merged into an existing `stateDiff`, or applied
+///   on top of an existing `state`.
+pub fn merge_overrides(base: &mut StateOverride, overlay: &StateOverride) {
+    for (addr, overlay_acct) in overlay {
+        match base.entry(*addr) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let base_acct = entry.get_mut();
 
-fn normalize_hex_map(value: &Value) -> HashMap<String, String> {
-    match value {
-        Value::Object(map) => map
-            .iter()
-            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-            .collect(),
-        _ => HashMap::new(),
-    }
-}
-
-fn map_to_json_object(map: HashMap<String, String>) -> Value {
-    let ordered: BTreeMap<_, _> = map.into_iter().collect();
-    serde_json::to_value(ordered).unwrap_or(Value::Object(Default::default()))
-}
-
-/// Merge two state override maps, with `other` taking precedence.
-pub fn merge_state_overrides(base: &mut HashMap<String, Value>, other: &HashMap<String, Value>) {
-    for (addr, overrides) in other {
-        match (base.get_mut(addr), overrides) {
-            (Some(Value::Object(existing)), Value::Object(new)) => {
-                if let Some(state) = new.get("state") {
-                    existing.insert("state".to_string(), state.clone());
-                    existing.remove("stateDiff");
-                }
-
-                if let Some(diff) = new.get("stateDiff") {
-                    let overlay_diff = normalize_hex_map(diff);
-                    if existing.contains_key("state") {
-                        let mut merged_state =
-                            normalize_hex_map(existing.get("state").unwrap_or(&Value::Null));
+                if let Some(overlay_state) = &overlay_acct.state {
+                    base_acct.state = Some(overlay_state.clone());
+                    base_acct.state_diff = None;
+                } else if let Some(overlay_diff) = &overlay_acct.state_diff {
+                    if let Some(base_state) = &mut base_acct.state {
                         for (k, v) in overlay_diff {
-                            merged_state.insert(k, v);
+                            base_state.insert(*k, *v);
                         }
-                        existing.insert("state".to_string(), map_to_json_object(merged_state));
-                        existing.remove("stateDiff");
                     } else {
-                        let mut merged_diff =
-                            normalize_hex_map(existing.get("stateDiff").unwrap_or(&Value::Null));
+                        let base_diff = base_acct.state_diff.get_or_insert_default();
                         for (k, v) in overlay_diff {
-                            merged_diff.insert(k, v);
+                            base_diff.insert(*k, *v);
                         }
-                        existing.insert("stateDiff".to_string(), map_to_json_object(merged_diff));
                     }
                 }
 
-                for (key, val) in new {
-                    if key == "state" || key == "stateDiff" {
-                        continue;
-                    }
-                    existing.insert(key.clone(), val.clone());
+                if overlay_acct.nonce.is_some() {
+                    base_acct.nonce = overlay_acct.nonce;
+                }
+                if overlay_acct.balance.is_some() {
+                    base_acct.balance = overlay_acct.balance;
+                }
+                if overlay_acct.code.is_some() {
+                    base_acct.code = overlay_acct.code.clone();
                 }
             }
-            _ => {
-                base.insert(addr.clone(), overrides.clone());
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(overlay_acct.clone());
             }
         }
     }
-}
-
-/// Merge two JSON state-override blobs.
-pub fn merge_state_override_values(base: &Value, overlay: &Value) -> Value {
-    let mut base_map = parse_state_overrides(&Some(base.clone()));
-    let overlay_map = parse_state_overrides(&Some(overlay.clone()));
-    merge_state_overrides(&mut base_map, &overlay_map);
-    serde_json::to_value(base_map).unwrap_or(Value::Object(Default::default()))
 }
 
 fn mapping_slot(key: B256, slot: u64) -> B256 {
@@ -104,17 +72,14 @@ fn encode_short_bytes(data: &[u8]) -> B256 {
     B256::from(word)
 }
 
-fn apply_bytes_to_state_diff(state_diff: &mut HashMap<String, String>, slot: B256, data: &[u8]) {
+fn apply_bytes_to_state_diff(state_diff: &mut SlotMap, slot: B256, data: &[u8]) {
     if data.len() <= 31 {
-        state_diff.insert(format!("{slot:#x}"), format!("{:#x}", encode_short_bytes(data)));
+        state_diff.insert(slot, encode_short_bytes(data));
         return;
     }
 
     let len_word = U256::from(data.len()) * U256::from(2u64) + U256::from(1u64);
-    state_diff.insert(
-        format!("{slot:#x}"),
-        format!("{:#x}", B256::from(len_word.to_be_bytes::<32>())),
-    );
+    state_diff.insert(slot, B256::from(len_word.to_be_bytes::<32>()));
 
     let base_slot_hash = keccak256(slot.as_slice());
     let base_slot = U256::from_be_bytes(base_slot_hash.into());
@@ -123,10 +88,7 @@ fn apply_bytes_to_state_diff(state_diff: &mut HashMap<String, String>, slot: B25
         let mut word = [0u8; 32];
         word[..chunk.len()].copy_from_slice(chunk);
         let slot_i = base_slot + U256::from(i);
-        state_diff.insert(
-            format!("{:#x}", B256::from(slot_i.to_be_bytes::<32>())),
-            format!("{:#x}", B256::from(word)),
-        );
+        state_diff.insert(B256::from(slot_i.to_be_bytes::<32>()), B256::from(word));
     }
 }
 
@@ -143,12 +105,15 @@ fn mailbox_key(chain_id: ChainId, dep: &CrossRollupDependency) -> Option<B256> {
 }
 
 /// Build mailbox state overrides for fulfilled dependencies.
+///
+/// Returns a typed `StateOverride` suitable for passing directly to
+/// `debug_traceCall`, or `None` if there are no applicable dependencies.
 pub fn build_mailbox_state_overrides(
     chain_id: ChainId,
     mailbox_address: Address,
     deps: &[CrossRollupDependency],
-) -> Option<Value> {
-    let mut state_diff = HashMap::<String, String>::new();
+) -> Option<StateOverride> {
+    let mut state_diff = SlotMap::default();
 
     for dep in deps {
         if dep.dest_chain_id != chain_id {
@@ -165,8 +130,8 @@ pub fn build_mailbox_state_overrides(
         let created_slot = mapping_slot(key, CREATED_KEYS_MAPPING_SLOT);
         apply_bytes_to_state_diff(&mut state_diff, inbox_slot, data);
         state_diff.insert(
-            format!("{created_slot:#x}"),
-            format!("{:#x}", B256::from(U256::from(1u64).to_be_bytes::<32>())),
+            created_slot,
+            B256::from(U256::from(1u64).to_be_bytes::<32>()),
         );
     }
 
@@ -174,33 +139,41 @@ pub fn build_mailbox_state_overrides(
         return None;
     }
 
-    Some(serde_json::json!({
-        format!("{mailbox_address:#x}"): {
-            "stateDiff": state_diff
-        }
-    }))
+    let account = AccountOverride {
+        state_diff: Some(state_diff),
+        ..Default::default()
+    };
+    let mut overrides = StateOverride::default();
+    overrides.insert(mailbox_address, account);
+    Some(overrides)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloy::primitives::{Address, U256};
+    use alloy_rpc_types_eth::state::AccountOverride;
     use compose_primitives::{ChainId, CrossRollupDependency};
-    use serde_json::json;
 
     #[test]
-    fn merge_overrides() {
-        let mut base = HashMap::from([("0xabc".to_string(), json!({"nonce": "0x1"}))]);
-        let other = HashMap::from([
-            ("0xabc".to_string(), json!({"balance": "0x100"})),
-            ("0xdef".to_string(), json!({"nonce": "0x0"})),
-        ]);
-        merge_state_overrides(&mut base, &other);
-        assert_eq!(base.len(), 2);
-
-        let abc = base.get("0xabc").unwrap().as_object().unwrap();
-        assert!(abc.contains_key("nonce"));
-        assert!(abc.contains_key("balance"));
+    fn merge_overrides_combines_accounts() {
+        let addr: Address = "0xaabbccddeeaabbccddeeaabbccddeeaabbccddee"
+            .parse()
+            .unwrap();
+        let mut base = StateOverride::default();
+        base.insert(addr, AccountOverride { nonce: Some(1), ..Default::default() });
+        let mut other = StateOverride::default();
+        other.insert(
+            addr,
+            AccountOverride {
+                balance: Some(U256::from(0x100u64)),
+                ..Default::default()
+            },
+        );
+        merge_overrides(&mut base, &other);
+        let acct = base.get(&addr).unwrap();
+        assert_eq!(acct.nonce, Some(1));
+        assert_eq!(acct.balance, Some(U256::from(0x100u64)));
     }
 
     #[test]
@@ -215,46 +188,54 @@ mod tests {
             session_id: Some(U256::from(42u64)),
         };
 
-        let overrides = build_mailbox_state_overrides(
-            ChainId(88888),
-            "0xe5d5d610fb9767df117f4076444b45404201a097"
-                .parse()
-                .unwrap(),
-            &[dep],
-        )
-        .unwrap();
+        let mailbox_addr: Address = "0xe5d5d610fb9767df117f4076444b45404201a097"
+            .parse()
+            .unwrap();
+        let overrides =
+            build_mailbox_state_overrides(ChainId(88888), mailbox_addr, &[dep]).unwrap();
 
-        let root = overrides.as_object().unwrap();
-        assert_eq!(root.len(), 1);
-        let account = root.values().next().unwrap().as_object().unwrap();
-        assert!(account.contains_key("stateDiff"));
+        let account = overrides.get(&mailbox_addr).unwrap();
+        let diff = account.state_diff.as_ref().unwrap();
+        // inbox slot + length slot entries
+        assert!(!diff.is_empty());
     }
 
     #[test]
-    fn merge_value_overrides_merges_state_diff() {
-        let base = json!({
-            "0xabc": {
-                "stateDiff": {
-                    "0x01": "0x10"
-                }
-            }
-        });
-        let overlay = json!({
-            "0xabc": {
-                "stateDiff": {
-                    "0x02": "0x20"
-                }
-            }
-        });
-
-        let merged = merge_state_override_values(&base, &overlay);
-        let obj = merged
-            .get("0xabc")
-            .and_then(|v| v.get("stateDiff"))
-            .and_then(|v| v.as_object())
+    fn merge_overrides_merges_state_diff() {
+        let addr: Address = "0xaabbccddeeaabbccddeeaabbccddeeaabbccddee"
+            .parse()
             .unwrap();
-        assert_eq!(obj.len(), 2);
-        assert_eq!(obj.get("0x01").and_then(|v| v.as_str()), Some("0x10"));
-        assert_eq!(obj.get("0x02").and_then(|v| v.as_str()), Some("0x20"));
+        let slot1 = B256::repeat_byte(0x01);
+        let slot2 = B256::repeat_byte(0x02);
+        let val1 = B256::repeat_byte(0x10);
+        let val2 = B256::repeat_byte(0x20);
+
+        let mut diff1 = SlotMap::default();
+        diff1.insert(slot1, val1);
+        let mut base = StateOverride::default();
+        base.insert(
+            addr,
+            AccountOverride {
+                state_diff: Some(diff1),
+                ..Default::default()
+            },
+        );
+
+        let mut diff2 = SlotMap::default();
+        diff2.insert(slot2, val2);
+        let mut overlay = StateOverride::default();
+        overlay.insert(
+            addr,
+            AccountOverride {
+                state_diff: Some(diff2),
+                ..Default::default()
+            },
+        );
+
+        merge_overrides(&mut base, &overlay);
+        let diff = base.get(&addr).unwrap().state_diff.as_ref().unwrap();
+        assert_eq!(diff.len(), 2);
+        assert_eq!(diff.get(&slot1), Some(&val1));
+        assert_eq!(diff.get(&slot2), Some(&val2));
     }
 }

@@ -7,6 +7,7 @@ use compose_peer::traits::PeerCoordinator;
 use compose_primitives::ChainId;
 use compose_simulation::traits::Simulator;
 
+use compose_metrics::SidecarMetrics;
 use compose_primitives_traits::{MailboxSender, PublisherClient, PutInboxBuilder};
 
 use crate::coordinator::DefaultCoordinator;
@@ -20,6 +21,7 @@ pub struct CoordinatorBuilder {
     mailbox_queue: Option<Arc<dyn MailboxQueue>>,
     peer_coordinator: Option<Arc<dyn PeerCoordinator>>,
     put_inbox_builder: Option<Arc<dyn PutInboxBuilder>>,
+    metrics: Option<Arc<SidecarMetrics>>,
     circ_timeout_ms: u64,
 }
 
@@ -42,6 +44,7 @@ impl CoordinatorBuilder {
             mailbox_queue: None,
             peer_coordinator: None,
             put_inbox_builder: None,
+            metrics: None,
             circ_timeout_ms: 10_000,
         }
     }
@@ -76,13 +79,18 @@ impl CoordinatorBuilder {
         self
     }
 
+    pub fn metrics(mut self, m: Arc<SidecarMetrics>) -> Self {
+        self.metrics = Some(m);
+        self
+    }
+
     pub fn circ_timeout_ms(mut self, ms: u64) -> Self {
         self.circ_timeout_ms = ms;
         self
     }
 
     pub fn build(self) -> DefaultCoordinator {
-        DefaultCoordinator::new(
+        let mut coord = DefaultCoordinator::new(
             self.chain_id,
             self.simulator,
             self.publisher,
@@ -91,6 +99,10 @@ impl CoordinatorBuilder {
             self.peer_coordinator,
             self.put_inbox_builder,
             self.circ_timeout_ms,
-        )
+        );
+        if let Some(m) = self.metrics {
+            coord.set_metrics(m);
+        }
+        coord
     }
 }

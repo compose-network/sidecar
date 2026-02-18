@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 alloy.workspace = true
+alloy-rpc-types-eth.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true

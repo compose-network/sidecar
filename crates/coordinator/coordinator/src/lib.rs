@@ -10,10 +10,8 @@ pub mod handlers;
 pub mod model;
 pub mod nonce_manager;
 pub mod pipeline;
-pub mod storage;
 pub mod traits;
 
-// Re-export shared types from primitives-traits for backward compatibility.
 pub use compose_primitives_traits::{
     CoordinatorError, MailboxSender, PublisherClient, PutInboxBuilder,
 };

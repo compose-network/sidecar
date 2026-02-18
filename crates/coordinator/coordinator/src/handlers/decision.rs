@@ -26,6 +26,14 @@ impl DefaultCoordinator {
 
         info!(instance_id, decision, "Decision received");
 
+        if let Some(m) = &self.metrics {
+            if decision {
+                m.xt_decided_commit_total.inc();
+            } else {
+                m.xt_decided_abort_total.inc();
+            }
+        }
+
         Ok(())
     }
 }

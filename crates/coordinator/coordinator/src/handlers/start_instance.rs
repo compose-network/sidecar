@@ -94,6 +94,10 @@ impl DefaultCoordinator {
             "New instance started"
         );
 
+        if let Some(m) = &self.metrics {
+            m.xt_received_total.inc();
+        }
+
         Ok(())
     }
 
@@ -105,6 +109,6 @@ impl DefaultCoordinator {
             "Rejecting StartInstance"
         );
         // Send an abort vote for the rejected instance.
-        let _ = self.send_vote(instance_id, &msg.instance_id, false).await;
+        let _ = self.send_vote(instance_id, false).await;
     }
 }

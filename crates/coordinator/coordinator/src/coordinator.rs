@@ -10,10 +10,13 @@ use compose_primitives::{ChainId, ChainState, PeriodId, SequenceNumber, Superblo
 use compose_simulation::traits::Simulator;
 use prost::Message;
 use tokio::sync::RwLock;
+use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
+use compose_metrics::SidecarMetrics;
 use compose_primitives_traits::{CoordinatorError, MailboxSender, PublisherClient, PutInboxBuilder};
 
+use crate::model::chain_overlay::ChainOverlay;
 use crate::model::pending_xt::PendingXt;
 use crate::model::xt_status::{determine_xt_status, XtStatusResponse};
 use crate::nonce_manager::DeferredNonceManager;
@@ -31,6 +34,9 @@ pub(crate) struct CoordinatorState {
     pub last_known_blocks: HashMap<ChainId, u64>,
     /// Monotonic counter for locally-originated XTs in standalone mode.
     pub origin_seq: SequenceNumber,
+    /// Per-chain overlay of post-simulation state diffs for the current
+    /// block/flashblock window. Lets XT-B see the state produced by XT-A.
+    pub chain_overlay: HashMap<ChainId, ChainOverlay>,
 }
 
 impl CoordinatorState {
@@ -44,6 +50,7 @@ impl CoordinatorState {
             last_sequence_num: SequenceNumber(0),
             last_known_blocks: HashMap::new(),
             origin_seq: SequenceNumber(0),
+            chain_overlay: HashMap::new(),
         }
     }
 
@@ -64,7 +71,6 @@ impl CoordinatorState {
 ///
 /// This struct is cheaply cloneable (all shared state is behind `Arc`).
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct DefaultCoordinator {
     pub(crate) chain_id: ChainId,
     pub(crate) state: Arc<RwLock<CoordinatorState>>,
@@ -76,6 +82,8 @@ pub struct DefaultCoordinator {
     pub(crate) peer_coordinator: Option<Arc<dyn PeerCoordinator>>,
     pub(crate) put_inbox_builder: Option<Arc<dyn PutInboxBuilder>>,
     pub(crate) circ_timeout_ms: u64,
+    pub(crate) task_tracker: TaskTracker,
+    pub(crate) metrics: Option<Arc<SidecarMetrics>>,
 }
 
 impl std::fmt::Debug for DefaultCoordinator {
@@ -110,7 +118,14 @@ impl DefaultCoordinator {
             peer_coordinator,
             put_inbox_builder,
             circ_timeout_ms,
+            task_tracker: TaskTracker::new(),
+            metrics: None,
         }
+    }
+
+    /// Attach a metrics instance to this coordinator.
+    pub fn set_metrics(&mut self, metrics: Arc<SidecarMetrics>) {
+        self.metrics = Some(metrics);
     }
 
     /// Start the coordinator's background tasks (cleanup loop, etc.).
@@ -118,16 +133,18 @@ impl DefaultCoordinator {
         info!(chain_id = %self.chain_id, "Starting coordinator");
 
         let coord = self.clone();
-        tokio::spawn(async move {
+        self.task_tracker.spawn(async move {
             coord.cleanup_loop().await;
         });
 
         Ok(())
     }
 
-    /// Gracefully shut down.
+    /// Gracefully shut down, waiting for all spawned tasks to complete.
     pub async fn stop(&self) -> Result<(), CoordinatorError> {
         info!("Stopping coordinator");
+        self.task_tracker.close();
+        self.task_tracker.wait().await;
         Ok(())
     }
 
@@ -308,7 +325,7 @@ impl DefaultCoordinator {
                 state.origin_seq
             };
             let pc = peer_coordinator.clone();
-            tokio::spawn(async move {
+            self.task_tracker.spawn(async move {
                 if let Err(e) = pc.forward_xt(&id, &txs, chain_id, origin_seq).await {
                     error!(instance_id = %id, error = %e, "Failed to forward XT to peers");
                 }
@@ -322,9 +339,67 @@ impl DefaultCoordinator {
 
         Ok(instance_id)
     }
+}
 
-    /// Cheap clone that shares all internal state (for spawning tasks).
-    pub(crate) fn clone_ref(&self) -> Self {
-        self.clone()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn has_active_instance_returns_false_when_decided() {
+        let coordinator = DefaultCoordinator::new(
+            ChainId(77777),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1000,
+        );
+
+        {
+            let mut state = coordinator.state.write().await;
+            let mut xt = PendingXt::new("xt-77777-1".to_string(), b"xt-77777-1".to_vec());
+            xt.raw_txs.insert(ChainId(77777), vec![vec![1]]);
+            xt.decision = Some(true);
+            xt.decided_at = Some(std::time::Instant::now());
+            state.pending.insert("xt-77777-1".to_string(), xt);
+        }
+
+        let state = coordinator.state.read().await;
+        assert!(!state.has_active_instance(ChainId(77777)));
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_old_decided_xts() {
+        let coordinator = DefaultCoordinator::new(
+            ChainId(77777),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1000,
+        );
+
+        {
+            let mut state = coordinator.state.write().await;
+            let mut xt = PendingXt::new("xt-77777-1".to_string(), b"xt-77777-1".to_vec());
+            // Simulate a decision that happened a long time ago.
+            xt.decision = Some(true);
+            xt.decided_at = Some(
+                std::time::Instant::now()
+                    .checked_sub(Duration::from_secs(400))
+                    .unwrap(),
+            );
+            state.pending.insert("xt-77777-1".to_string(), xt);
+        }
+
+        coordinator.cleanup(Duration::from_secs(300)).await;
+
+        let state = coordinator.state.read().await;
+        assert!(state.pending.is_empty());
     }
 }

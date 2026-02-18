@@ -4,6 +4,7 @@
 //! coordination, simulation, mailbox, and server crates.
 
 use alloy::primitives::{Address, B256, U256};
+pub use alloy_rpc_types_eth::state::StateOverride;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -152,7 +153,7 @@ pub struct ChainState {
     pub state_root: B256,
     pub timestamp: u64,
     pub gas_limit: u64,
-    pub state_overrides: Option<serde_json::Value>,
+    pub state_overrides: Option<StateOverride>,
 }
 
 /// A cross-rollup dependency (mailbox read).
@@ -184,7 +185,7 @@ pub struct CrossRollupMessage {
 pub struct SimulationResult {
     pub success: bool,
     pub error: Option<String>,
-    pub state_overrides: Option<serde_json::Value>,
+    pub state_overrides: Option<StateOverride>,
     pub dependencies: Vec<CrossRollupDependency>,
     pub outbound_messages: Vec<CrossRollupMessage>,
 }

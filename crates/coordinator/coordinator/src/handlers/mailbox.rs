@@ -27,6 +27,10 @@ impl DefaultCoordinator {
                 .map_err(|e| CoordinatorError::Mailbox(e.to_string()))?;
         }
 
+        if let Some(m) = &self.metrics {
+            m.circ_messages_received_total.inc();
+        }
+
         let mut state = self.state.write().await;
         let matched = state.pending.iter_mut().find_map(|(instance_key, xt)| {
             if xt.instance_id == msg.instance_id {

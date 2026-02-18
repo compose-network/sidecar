@@ -1,7 +1,6 @@
 //! Per-chain state overlay tracking for simulation windows.
 
-use serde_json::Value;
-use std::collections::HashMap;
+use compose_primitives::StateOverride;
 
 /// Accumulated state overlay for a chain within a single block/flashblock
 /// window. Gives subsequent simulations the post-state of previously committed
@@ -10,7 +9,7 @@ use std::collections::HashMap;
 pub struct ChainOverlay {
     pub block_number: u64,
     pub flashblock_index: u64,
-    pub overlay: HashMap<String, Value>,
+    pub overlay: StateOverride,
 }
 
 impl ChainOverlay {
@@ -18,7 +17,7 @@ impl ChainOverlay {
         Self {
             block_number,
             flashblock_index,
-            overlay: HashMap::new(),
+            overlay: StateOverride::default(),
         }
     }
 

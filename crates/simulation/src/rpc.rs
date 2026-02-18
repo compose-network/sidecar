@@ -11,7 +11,7 @@ use alloy_rpc_types_trace::geth::{
     CallConfig, GethDebugTracingCallOptions, GethDebugTracingOptions,
 };
 use async_trait::async_trait;
-use compose_mailbox::overrides::{build_mailbox_state_overrides, merge_state_override_values};
+use compose_mailbox::overrides::{build_mailbox_state_overrides, merge_overrides};
 use compose_primitives::{ChainId, CrossRollupDependency, CrossRollupMessage, SimulationResult};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -79,29 +79,19 @@ impl RpcSimulator {
         Ok(tx_request)
     }
 
-    fn parse_state_overrides(value: &Value) -> Result<Option<StateOverride>, SimulationError> {
-        match value {
-            Value::Null => Ok(None),
-            Value::Object(map) if map.is_empty() => Ok(None),
-            _ => serde_json::from_value::<StateOverride>(value.clone()).map(Some).map_err(|e| {
-                SimulationError::Other(format!("invalid state overrides payload: {e}"))
-            }),
-        }
-    }
-
     async fn trace_call(
         &self,
         chain_id: ChainId,
         tx_args: &TransactionRequest,
-        state_overrides: &Value,
+        state_overrides: &StateOverride,
     ) -> Result<Value, SimulationError> {
         let url = self.rpc_url(chain_id)?;
 
         let tracing_opts = GethDebugTracingOptions::call_tracer(CallConfig::default().with_log());
         let mut trace_opts = GethDebugTracingCallOptions::new(tracing_opts);
 
-        if let Some(overrides) = Self::parse_state_overrides(state_overrides)? {
-            trace_opts = trace_opts.with_state_overrides(overrides);
+        if !state_overrides.is_empty() {
+            trace_opts = trace_opts.with_state_overrides(state_overrides.clone());
         }
 
         let params = json!([tx_args, "latest", trace_opts]);
@@ -188,7 +178,7 @@ impl Simulator for RpcSimulator {
         &self,
         chain_id: ChainId,
         tx: &[u8],
-        state_overrides: &Value,
+        state_overrides: &StateOverride,
     ) -> Result<SimulationResult, SimulationError> {
         let tx_args = Self::decode_tx(tx)?;
 
@@ -208,10 +198,15 @@ impl Simulator for RpcSimulator {
 
         let (dependencies, outbound_messages) = self.extract_mailbox_data(&trace, chain_id);
 
+        // Parse stateOverrides returned by the trace into typed form.
+        let state_overrides_result = trace
+            .get("stateOverrides")
+            .and_then(|v| serde_json::from_value::<StateOverride>(v.clone()).ok());
+
         Ok(SimulationResult {
             success,
             error: error_msg,
-            state_overrides: trace.get("stateOverrides").cloned(),
+            state_overrides: state_overrides_result,
             dependencies,
             outbound_messages,
         })
@@ -221,21 +216,20 @@ impl Simulator for RpcSimulator {
         &self,
         chain_id: ChainId,
         tx: &[u8],
-        state_overrides: &Value,
+        state_overrides: &StateOverride,
         _already_sent_msgs: &[CrossRollupMessage],
         fulfilled_deps: &[CrossRollupDependency],
     ) -> Result<SimulationResult, SimulationError> {
-        let mut merged_overrides = state_overrides.clone();
+        let mut merged = state_overrides.clone();
 
         if let Some(mailbox_addr) = self.mailbox_address {
             if let Some(mailbox_overrides) =
                 build_mailbox_state_overrides(chain_id, mailbox_addr, fulfilled_deps)
             {
-                merged_overrides =
-                    merge_state_override_values(&merged_overrides, &mailbox_overrides);
+                merge_overrides(&mut merged, &mailbox_overrides);
             }
         }
 
-        self.simulate(chain_id, tx, &merged_overrides).await
+        self.simulate(chain_id, tx, &merged).await
     }
 }
