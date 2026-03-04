@@ -1,0 +1,14 @@
+[package]
+name = "compose-config"
+version = "0.1.0"
+description = "Configuration types and loading utilities for the Compose sidecar"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+compose-primitives.workspace = true
+clap.workspace = true

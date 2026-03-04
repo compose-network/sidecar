@@ -1,0 +1,1 @@
+//! Coordinator-internal integration traits.

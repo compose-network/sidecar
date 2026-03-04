@@ -1,0 +1,20 @@
+[package]
+name = "compose-primitives"
+version = "0.1.0"
+description = "Core protocol primitives and shared data types for Compose sidecar components"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy.workspace = true
+alloy-rpc-types-eth.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+bytes.workspace = true

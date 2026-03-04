@@ -1,0 +1,32 @@
+[package]
+name = "compose-coordinator"
+version = "0.1.0"
+description = "Core sidecar coordinator for SCP/SBCP instance lifecycle, simulation, voting, and builder polling"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+compose-primitives.workspace = true
+compose-primitives-traits.workspace = true
+compose-metrics.workspace = true
+compose-proto.workspace = true
+compose-mailbox.workspace = true
+compose-simulation.workspace = true
+compose-peer.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+alloy.workspace = true
+alloy-rpc-types-eth.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+hex.workspace = true
+sha2.workspace = true
+prost.workspace = true
+futures.workspace = true

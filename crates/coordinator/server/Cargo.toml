@@ -1,0 +1,29 @@
+[package]
+name = "compose-server"
+version = "0.1.0"
+description = "Axum HTTP API surface for sidecar builder, peer, mailbox, and XT endpoints"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+compose-primitives.workspace = true
+compose-proto.workspace = true
+compose-coordinator.workspace = true
+compose-metrics.workspace = true
+compose-peer.workspace = true
+prometheus-client.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+prost.workspace = true

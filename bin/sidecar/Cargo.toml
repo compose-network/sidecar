@@ -1,0 +1,32 @@
+[package]
+name = "sidecar"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "sidecar"
+path = "src/main.rs"
+
+[dependencies]
+compose-primitives.workspace = true
+compose-config.workspace = true
+compose-transport.workspace = true
+compose-peer.workspace = true
+compose-mailbox.workspace = true
+compose-simulation.workspace = true
+compose-coordinator.workspace = true
+compose-metrics.workspace = true
+compose-publisher.workspace = true
+compose-server.workspace = true
+compose-tracing.workspace = true
+prometheus-client.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+axum.workspace = true

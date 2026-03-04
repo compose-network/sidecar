@@ -1,0 +1,119 @@
+[workspace.package]
+edition = "2021"
+rust-version = "1.91"
+license = "MIT"
+
+[workspace]
+members = [
+    "bin/sidecar",
+    "crates/primitives",
+    "crates/primitives-traits",
+    "crates/proto",
+    "crates/config",
+    "crates/net/transport",
+    "crates/net/peer",
+    "crates/net/publisher",
+    "crates/mailbox",
+    "crates/simulation",
+    "crates/metrics",
+    "crates/coordinator/coordinator",
+    "crates/coordinator/server",
+    "crates/tracing",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# compose
+compose-primitives = { path = "crates/primitives" }
+compose-primitives-traits = { path = "crates/primitives-traits" }
+compose-proto = { path = "crates/proto" }
+compose-config = { path = "crates/config" }
+compose-transport = { path = "crates/net/transport" }
+compose-peer = { path = "crates/net/peer" }
+compose-publisher = { path = "crates/net/publisher" }
+compose-mailbox = { path = "crates/mailbox" }
+compose-simulation = { path = "crates/simulation" }
+compose-coordinator = { path = "crates/coordinator/coordinator" }
+compose-server = { path = "crates/coordinator/server" }
+compose-metrics = { path = "crates/metrics" }
+compose-tracing = { path = "crates/tracing" }
+
+# Async
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# QUIC
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rcgen = "0.13"
+
+# Ethereum
+alloy = { version = "1.0", features = [
+    "sol-types", "consensus", "network",
+    "signers", "signer-local", "providers", "provider-http",
+    "rpc-types", "rlp", "k256",
+] }
+alloy-rpc-types-eth = "1.1.2"
+
+# Protobuf
+prost = "0.13"
+prost-build = "0.13"
+
+# HTTP
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Config
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+
+# Misc
+bytes = "1.0"
+prometheus-client = "0.22"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Style
+dbg_macro = "warn"
+doc_markdown = "warn"
+derive_partial_eq_without_eq = "warn"
+uninlined_format_args = "warn"
+redundant_else = "warn"
+flat_map_option = "warn"
+manual_let_else = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+match_wildcard_for_single_variants = "warn"
+semicolon_if_nothing_returned = "warn"
+use_self = "warn"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1

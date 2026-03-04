@@ -1,0 +1,25 @@
+[package]
+name = "compose-simulation"
+version = "0.1.0"
+description = "Transaction simulation interfaces and RPC-backed execution for Compose XT processing"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+compose-primitives.workspace = true
+compose-mailbox.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+alloy.workspace = true
+alloy-rpc-types-eth = "1.1.2"
+alloy-rpc-types-trace = "1.1.2"
+thiserror.workspace = true
+tracing.workspace = true
+hex.workspace = true

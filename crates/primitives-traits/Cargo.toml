@@ -1,0 +1,17 @@
+[package]
+name = "compose-primitives-traits"
+version = "0.1.0"
+description = "Shared traits and error types for sidecar coordination"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy.workspace = true
+compose-primitives.workspace = true
+compose-proto.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
